@@ -97,10 +97,16 @@ jobs:
           fi
 
       - name: Build zxPluginsInject.dylib
-        if: ${{ inputs.ipa_release_tag != '' }}
         run: |
           chmod +x Tools/build-zxpi.sh
           Tools/build-zxpi.sh
+
+      - name: Upload zxPluginsInject.dylib artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zxPluginsInject.dylib
+          path: packages/zxPluginsInject.dylib
+          if-no-files-found: error
 
       - name: Fetch OpeninSafariSpotify extension (.appex)
         if: ${{ inputs.ipa_release_tag != '' }}
