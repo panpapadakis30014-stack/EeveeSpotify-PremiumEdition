@@ -37,6 +37,19 @@ How the Premium check works: the tweak reads the account `type` that Spotify's s
 2. Run the **Build Premium Edition** workflow with `ipa_release_tag` set to that tag (leave it empty to build only the `.deb`).
 3. Download the `EeveeSpotify-PremiumEdition-IPA` artifact and sideload it.
 
+## Premium Edition roadmap (client-side only, never touches entitlements)
+
+- [ ] Sleep timer: fade out over the last minute / stop at end of track
+- [ ] Lyrics: copy a line, share the synced lyrics as text
+- [ ] Home: choose which shelves appear and their order
+- [ ] Hide podcasts and audiobooks everywhere
+- [ ] Volume normalization presets
+- [ ] "Song radio from here" long-press shortcut
+- [ ] Queue tools: clear, shuffle queue only, remove played
+- [ ] Startup page: Home, Search or Library
+- [ ] Compact now-playing bar, hide Canvas videos
+- [ ] Per-playlist cover blur and colour themes
+
 ## How to build an EeveeSpotify IPA using Github actions
 > [!NOTE]
 > If this your first time, complete following steps before starting:
