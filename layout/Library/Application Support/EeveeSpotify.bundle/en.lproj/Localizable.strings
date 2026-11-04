@@ -33,7 +33,7 @@ overwrite_configuration = "Overwrite Configuration";
 overwrite_configuration_description = "Replace remote configuration with the dumped Premium one. This configuration defines most UI/UX parameters and may be helpful, although it could cause issues.";
 
 true_shuffle = "True Shuffle";
-true_shuffle_dec = "Blocks Spotify's free-tier Smart Shuffle from mixing recommended tracks into your queue. Shuffle stays inside the playlist. ";
+true_shuffle_dec = "Stops Smart Shuffle from mixing recommended tracks into your queue. Shuffle stays inside the playlist. ";
 
 // Lyrics
 
@@ -533,3 +533,5 @@ karaoke_blur_intensity = "Blur intensity";
 glass_lyrics_view = "Custom lyrics view";
 lyrics_source_restart_popup = "Restart Spotify so the new lyrics source is used everywhere. Songs you already played keep their old lyrics until then.";
 restart_later = "Later";
+premium_account = "Premium Account";
+premium_account_subtitle = "Subscription status";

@@ -79,20 +79,9 @@ jobs:
             -o "$RUNNER_TEMP/url-ad-classification-tests"
           "$RUNNER_TEMP/url-ad-classification-tests"
           swiftc \
-            Sources/EeveeSpotify/Premium/Helpers/ServerSidedFeaturePolicy.swift \
-            Tests/ServerSidedFeaturePolicy/main.swift \
-            -o "$RUNNER_TEMP/server-sided-feature-policy-tests"
-          "$RUNNER_TEMP/server-sided-feature-policy-tests"
-          swiftc \
-            Sources/EeveeSpotify/Premium/Helpers/BundledConfigurationPolicy.swift \
-            Tests/BundledConfigurationPolicy/main.swift \
-            -o "$RUNNER_TEMP/bundled-configuration-policy-tests"
-          "$RUNNER_TEMP/bundled-configuration-policy-tests"
-          swiftc \
             Tests/CustomTabsActivation/main.swift \
             -o "$RUNNER_TEMP/custom-tabs-activation-tests"
           "$RUNNER_TEMP/custom-tabs-activation-tests"
-          python3 Tests/ResolveConfigurationSnapshot/test.py
 
       - name: Build ${{ matrix.label }} .deb
         env:

@@ -26,140 +26,36 @@ func exitApplication() {
     }
 }
 
-// Split so bootstrap patching survives UI hooks breaking on a given Spotify build.
-struct PremiumBootstrapGroup: HookGroup { }
-struct PremiumUIHooksGroup: HookGroup { }
+// Read-only network hooks: observe the bootstrap account type for PremiumGate,
+// and (for verified Premium accounts) serve custom lyrics / strip promo slots.
+struct NetworkHooksGroup: HookGroup { }
 
-struct BasePremiumPatchingGroup: HookGroup { }
+// Capture the now-playing stateful player for lyrics + karaoke.
+struct LegacyStatefulPlayerGroup: HookGroup { }
+struct StatefulPlayerGroup: HookGroup { }
 
-struct IOS14PremiumPatchingGroup: HookGroup { }
-struct NonIOS14PremiumPatchingGroup: HookGroup { }
-struct IOS14And15PremiumPatchingGroup: HookGroup { }
-struct V91PremiumPatchingGroup: HookGroup { }
-struct LatestPremiumPatchingGroup: HookGroup { }
-
-// Early 9.1.x builds dropped the offline helper; newer ones bring it back.
-func activateV91ServerSidedReminderIfAvailable() {
-    let className = ContentOffliningUIHelperImplementationModernHook.targetName
-    let selector = Selector((
-        "downloadToggledWithCurrentAvailability:addAction:removeAction:pageIdentifier:pageURI:interactionID:"
-    ))
-
-    guard let cls = NSClassFromString(className),
-          class_getInstanceMethod(cls, selector) != nil else {
-        writeDebugLog("[INIT] Server-sided download reminder unavailable on this 9.1.x build")
+func activateStatefulPlayerCapture() {
+    guard let cls = NSClassFromString("NowPlaying_PlatformImpl.NowPlayingPlatformSwiftServiceImplementation") else {
+        writeDebugLog("[INIT] Skipped stateful player capture (service class missing)")
         return
     }
-
-    LatestPremiumPatchingGroup().activate()
-    writeDebugLog("[INIT] Activated server-sided download reminder for 9.1.x")
-}
-
-func activatePremiumPatchingGroup() {
-    BasePremiumPatchingGroup().activate()
-    
     if EeveeSpotify.hookTarget == .lastAvailableiOS14 {
-        IOS14PremiumPatchingGroup().activate()
-    }
-    else if EeveeSpotify.hookTarget == .v91 {
-        NonIOS14PremiumPatchingGroup().activate()
-        // Removed in 9.1.28; hooking a missing method is fatal.
-        let trackRowsSel = Selector(("initWithViewURI:onDemandSet:onDemandTrialService:trackRowsEnabled:productState:"))
-        if UIView.instancesRespond(to: trackRowsSel) {
-            V91PremiumPatchingGroup().activate()
+        if class_getInstanceMethod(cls, Selector(("provideStatefulPlayer"))) != nil {
+            LegacyStatefulPlayerGroup().activate()
         }
-    }
-    else {
-        NonIOS14PremiumPatchingGroup().activate()
-        
-        if EeveeSpotify.hookTarget == .lastAvailableiOS15 {
-            IOS14And15PremiumPatchingGroup().activate()
-        }
-        else {
-            LatestPremiumPatchingGroup().activate()
-        }
+    } else if class_getInstanceMethod(cls, Selector(("provideStatefulPlayerWithFeatureIdentifier:"))) != nil {
+        StatefulPlayerGroup().activate()
+    } else {
+        writeDebugLog("[INIT] Skipped stateful player capture (selector missing)")
     }
 }
 
-// MARK: - Session protection activation
-func activateSessionLogoutProtection(minimal: Bool) {
-    func log(_ msg: String) {
-        eeveeLog("[EeveeSpotify][SessionProtect] %@", msg)
-    }
-
-    @inline(__always)
-    func classHasInstanceMethod(_ cls: AnyClass, _ sel: Selector) -> Bool {
-        return class_getInstanceMethod(cls, sel) != nil
-    }
-
-    if minimal {
-        if let cls = NSClassFromString("NSURLSessionTask"), classHasInstanceMethod(cls, #selector(URLSessionTask.resume)) {
-            SessionLogoutNetworkHookGroup().activate()
-            log("Activated URLSessionTask hooks (minimal)")
-        } else {
-            log("Skipped URLSessionTask hooks (missing selector)")
-        }
+func activateNetworkHooks() {
+    guard NSClassFromString(SPTDataLoaderServiceHook.targetName) != nil else {
+        writeDebugLog("[INIT] Skipped NetworkHooksGroup (SPTDataLoaderService missing)")
         return
     }
-
-    if let cls = NSClassFromString("SPTAuthSessionImplementation") {
-        let required: [Selector] = [
-            Selector(("logout")),
-            Selector(("logoutWithReason:")),
-            Selector(("callSessionDidLogoutOnDelegateWithReason:")),
-            Selector(("logWillLogoutEventWithLogoutReason:")),
-            Selector(("destroy")),
-        ]
-        let ok = required.allSatisfy { classHasInstanceMethod(cls, $0) }
-        if ok {
-            SessionLogoutAuthHookGroup().activate()
-            log("Activated auth hooks")
-        } else {
-            log("Skipped auth hooks (missing selector)")
-        }
-    } else {
-        log("Skipped auth hooks (missing class SPTAuthSessionImplementation)")
-    }
-
-    if let cls = NSClassFromString("_TtC24Connectivity_SessionImpl18SessionServiceImpl") {
-        let required: [Selector] = [
-            Selector(("automatedLogoutThenLogin")),
-            Selector(("userInitiatedLogout")),
-            Selector(("sessionDidLogout:withReason:")),
-        ]
-        let ok = required.allSatisfy { classHasInstanceMethod(cls, $0) }
-        if ok {
-            SessionLogoutConnectivityHookGroup().activate()
-            log("Activated connectivity hooks")
-        } else {
-            log("Skipped connectivity hooks (missing selector)")
-        }
-    } else {
-        log("Skipped connectivity hooks (missing class SessionServiceImpl)")
-    }
-
-    if let cls = NSClassFromString("ARTWebSocketTransport") {
-        let required: [Selector] = [
-            Selector(("webSocket:didReceiveMessage:")),
-            Selector(("webSocket:didFailWithError:")),
-        ]
-        let ok = required.allSatisfy { classHasInstanceMethod(cls, $0) }
-        if ok {
-            SessionLogoutAblyHookGroup().activate()
-            log("Activated Ably hooks")
-        } else {
-            log("Skipped Ably hooks (missing selector)")
-        }
-    } else {
-        log("Skipped Ably hooks (missing class ARTWebSocketTransport)")
-    }
-
-    if let cls = NSClassFromString("NSURLSessionTask"), classHasInstanceMethod(cls, #selector(URLSessionTask.resume)) {
-        SessionLogoutNetworkHookGroup().activate()
-        log("Activated URLSessionTask hooks")
-    } else {
-        log("Skipped URLSessionTask hooks (missing selector)")
-    }
+    NetworkHooksGroup().activate()
 }
 
 // MARK: - Bootstrap breadcrumbs
@@ -218,16 +114,32 @@ struct EeveeSpotify: Tweak {
 
     init() {
         eeveeBreadcrumb("Tweak init() entered")
-        // A stale flag cancels the next bootstrap and hangs the splash screen.
-        UserDefaults.hasPatchedBootstrap = false
 
         if eeveeEnvFlag("EEVEE_DISABLE_ALL") {
             eeveeBreadcrumb("EEVEE_DISABLE_ALL=1 -> returning without hooks")
             return
         }
 
-        // Local-only premium force; independent of patching, so premium UI survives everything else being off.
-        activateEeveePremiumForce()
+        let spotifyBuild = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
+        writeDebugLog("=== EeveeSpotify Premium Edition \(EeveeSpotify.version) (build \(EeveeSpotify.buildNumber)) starting ===")
+        writeDebugLog("[INIT] Spotify: \(EeveeSpotify.spotifyVersion) (build \(spotifyBuild))")
+        writeDebugLog("[INIT] iOS: \(UIDevice.current.systemVersion), Device: \(UIDevice.current.model)")
+        writeDebugLog("[INIT] Hook target: \(EeveeSpotify.hookTarget)")
+        writeDebugLog("[INIT] Lyrics source: \(UserDefaults.lyricsSource)")
+
+        // Always on, read-only: lets PremiumGate see the real account type that
+        // Spotify's servers report. Nothing is modified for non-Premium accounts.
+        activateNetworkHooks()
+
+        let premiumStatus = PremiumGate.statusAtLaunch
+        writeDebugLog("[INIT] Premium status at launch: \(premiumStatus)")
+
+        guard premiumStatus == .premium else {
+            // Unknown (first launch / after a reset) or a free account: run stock
+            // Spotify. PremiumGate prompts for a restart once Premium is verified.
+            writeDebugLog("[INIT] Features disabled until an active Spotify Premium subscription is verified")
+            return
+        }
 
         activateTelemetryBlock()
         activateTheme()
@@ -257,67 +169,11 @@ struct EeveeSpotify: Tweak {
         // UIPasteboard.general is a private subclass whose setters bypass the base-class hooks.
         PasteboardConcreteSwizzler.install()
 
-        // Full protection crashes some 9.1.x builds.
-        if EeveeSpotify.hookTarget == .v91 {
-            activateSessionLogoutProtection(minimal: true)
-        } else {
-            activateSessionLogoutProtection(minimal: false)
-        }
-
-        let spotifyBuild = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
-        let iosVersion = UIDevice.current.systemVersion
-        let deviceModel = UIDevice.current.model
-
-        writeDebugLog("=== EeveeSpotify \(EeveeSpotify.version) (build \(EeveeSpotify.buildNumber)) starting ===")
-        writeDebugLog("[INIT] Spotify: \(EeveeSpotify.spotifyVersion) (build \(spotifyBuild))")
-        writeDebugLog("[INIT] iOS: \(iosVersion), Device: \(deviceModel)")
-        writeDebugLog("[INIT] Hook target: \(EeveeSpotify.hookTarget)")
-        writeDebugLog("[INIT] Patch type: \(UserDefaults.patchType)")
-        writeDebugLog("[INIT] Lyrics source: \(UserDefaults.lyricsSource)")
-        writeDebugLog("[INIT] tweakInitTime: \(tweakInitTime)")
-
         activateCarPlayCrashFix()
-
-        let hookTargets: [(String, String)] = [
-            ("SPTAuthSessionImplementation", "SPTAuthSession"),
-            ("_TtC24Connectivity_SessionImpl18SessionServiceImpl", "SessionServiceImpl"),
-            ("SPTAuthLegacyLoginControllerImplementation", "LegacyLoginController"),
-            ("_TtC24Connectivity_SessionImplP33_831B98CC28223E431E21CD27ADD20AF222OauthAccessTokenBridge", "OauthAccessTokenBridge"),
-            ("ARTWebSocketTransport", "AblyWebSocket"),
-            ("ARTSRWebSocket", "AblySRWebSocket"),
-        ]
-        var allFound = true
-        for (className, label) in hookTargets {
-            if NSClassFromString(className) != nil {
-                writeDebugLog("[INIT] \(label) class found")
-            } else {
-                writeDebugLog("[INIT] MISSING class for \(label): \(className)")
-                allFound = false
-            }
-        }
-        if allFound {
-            writeDebugLog("[INIT] All \(hookTargets.count) hook targets verified")
-        }
+        activateStatefulPlayerCapture()
 
         if EeveeSpotify.hookTarget == .v91 {
-
-            if UserDefaults.patchType.isPatching {
-                PremiumBootstrapGroup().activate()
-                writeDebugLog("[INIT] Activated PremiumBootstrapGroup")
-
-                if let hub = NSClassFromString("HUBViewModelBuilderImplementation"),
-                   class_getInstanceMethod(hub, Selector(("addJSONDictionary:"))) != nil {
-                    PremiumUIHooksGroup().activate()
-                } else {
-                    writeDebugLog("[INIT] Skipped PremiumUIHooksGroup (missing HUBViewModelBuilderImplementation/addJSONDictionary:)")
-                }
-
-                activateV91ServerSidedReminderIfAvailable()
-            }
-
-            let lyricsEnabled = UserDefaults.lyricsSource.isReplacingLyrics
-
-            if lyricsEnabled {
+            if UserDefaults.lyricsSource.isReplacingLyrics {
                 let fullscreenOK: Bool = {
                     if let cls = NSClassFromString("Lyrics_FullscreenElementPageImpl.FullscreenElementViewController") {
                         return class_getInstanceMethod(cls, #selector(UIViewController.viewDidLoad)) != nil
@@ -344,7 +200,6 @@ struct EeveeSpotify: Tweak {
                 } else {
                     writeDebugLog("[INIT] Skipped V91LyricsGroup (NPVScrollViewController missing)")
                 }
-
             }
 
             if let cls = NSClassFromString("ProfileSettingsSection"),
@@ -376,7 +231,6 @@ struct EeveeSpotify: Tweak {
             }
             eeveeLog("[EeveeSpotify] Initialization complete for 9.1.x")
             TrueShuffleHook.install()
-            activateEeveeProbes()
             activateSponsorBlock()
             activateKaraokeHooks()
             return
@@ -385,19 +239,15 @@ struct EeveeSpotify: Tweak {
         if UserDefaults.experimentsOptions.showInstagramDestination {
             InstgramDestinationGroup().activate()
         }
-        
+
         if UserDefaults.darkPopUps {
             DarkPopUps().activate()
         }
-        
-        if UserDefaults.patchType.isPatching {
-            activatePremiumPatchingGroup()
-        }
-        
+
         if UserDefaults.lyricsSource.isReplacingLyrics {
             BaseLyricsGroup().activate()
             LyricsErrorHandlingGroup().activate()
-            
+
             if EeveeSpotify.hookTarget == .latest {
                 ModernLyricsGroup().activate()
             }
@@ -405,7 +255,7 @@ struct EeveeSpotify: Tweak {
                 LegacyLyricsGroup().activate()
             }
         }
-        
+
         UniversalSettingsIntegrationProfileGroup().activate()
         UniversalSettingsIntegrationSettingsVCGroup().activate()
         if NSClassFromString("RootSettingsViewController") != nil {
@@ -417,7 +267,7 @@ struct EeveeSpotify: Tweak {
         UniversalSettingsIntegrationNavGroup().activate()
         SettingsIntegrationGroup().activate()
 
-        activateEeveeProbes()
+        TrueShuffleHook.install()
         activateSponsorBlock()
         activateKaraokeHooks()
     }

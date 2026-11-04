@@ -1,8 +1,8 @@
 Package: com.eevee.spotify
-Name: EeveeSpotify
+Name: EeveeSpotify Premium Edition
 Version: 7.0.0
 Architecture: iphoneos-arm
-Description: A tweak to get Spotify Premium for free, just like Spotilife
+Description: Lyrics, Liquid Glass and UI enhancements for Spotify Premium subscribers (no Premium patching)
 Maintainer: jaydenjcpy
 Author: Eevee
 Section: Tweaks

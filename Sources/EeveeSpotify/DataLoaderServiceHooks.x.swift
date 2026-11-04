@@ -24,7 +24,7 @@ func captureAccessToken(from request: URLRequest?) {
 // Spotify's primary URLSession delegate; patching is shared with HttpClientURLSessionHook via SpotifyResponsePatcher.
 
 class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
-    typealias Group = PremiumBootstrapGroup
+    typealias Group = NetworkHooksGroup
     static let targetName = "SPTDataLoaderService"
 
     func URLSession(
@@ -49,29 +49,16 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
             return
         }
 
-        // 304 already served — suppress the second completion.
-        if SpotifyResponsePatcher.consumeCustomizeTask(task.taskIdentifier) {
-            orig.URLSession(session, task: task, didCompleteWithError: nil)
-            return
-        }
-
         guard error == nil, SpotifyResponsePatcher.shouldModify(url) else {
             orig.URLSession(session, task: task, didCompleteWithError: error)
             return
         }
 
         guard let buffer = URLSessionHelper.shared.obtainData(for: task) else {
-            // Customize 304 has no body; a fresh process falls back to the persisted patched copy.
-            if url.isCustomize, let cached = SpotifyResponsePatcher.cachedCustomizeData
-                ?? UserDefaults.cachedCustomizeData {
-                orig.URLSession(session, dataTask: task, didReceiveData: cached)
-                orig.URLSession(session, task: task, didCompleteWithError: nil)
-            } else {
-                // Consumers crash on completion without a prior didReceiveData.
-                writeDebugLog("[DL] Missing buffered body for \(url.absoluteString) (taskId=\(task.taskIdentifier))")
-                orig.URLSession(session, dataTask: task, didReceiveData: Data())
-                orig.URLSession(session, task: task, didCompleteWithError: error)
-            }
+            // Consumers crash on completion without a prior didReceiveData.
+            writeDebugLog("[DL] Missing buffered body for \(url.absoluteString) (taskId=\(task.taskIdentifier))")
+            orig.URLSession(session, dataTask: task, didReceiveData: Data())
+            orig.URLSession(session, task: task, didCompleteWithError: error)
             return
         }
 
@@ -117,22 +104,9 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
         didReceiveResponse response: HTTPURLResponse,
         completionHandler handler: @escaping (URLSession.ResponseDisposition) -> Void
     ) {
-        if let url = task.currentRequest?.url, url.isCustomize, response.statusCode == 304 {
-            // A 304 would make Spotify use its unpatched disk-cached config, so replay ours as a 200.
-            if let cached = SpotifyResponsePatcher.cachedCustomizeData
-                ?? UserDefaults.cachedCustomizeData,
-               let synthetic = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "2.0", headerFields: [:]) {
-                orig.URLSession(session, dataTask: task, didReceiveResponse: synthetic, completionHandler: handler)
-                orig.URLSession(session, dataTask: task, didReceiveData: cached)
-                SpotifyResponsePatcher.markCustomizeTaskHandled(task.taskIdentifier)
-                return
-            }
-            orig.URLSession(session, dataTask: task, didReceiveResponse: response, completionHandler: handler)
-            return
-        }
-
         // Fetching on this delegate queue deadlocks; the held completion handler keeps the task waiting.
-        guard let url = task.currentRequest?.url, url.isLyrics, response.statusCode != 200 else {
+        guard PremiumGate.isPremium, BaseLyricsGroup.isActive,
+              let url = task.currentRequest?.url, url.isLyrics, response.statusCode != 200 else {
             orig.URLSession(session, dataTask: task, didReceiveResponse: response, completionHandler: handler)
             return
         }

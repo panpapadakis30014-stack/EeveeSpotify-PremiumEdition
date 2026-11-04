@@ -1,11 +1,21 @@
 ![Banner](Images/banner.png?)
 
-# EeveeSpotifyReincarnated
+# EeveeSpotify Premium Edition
+
+_A fork of EeveeSpotifyReincarnated with all Premium spoofing removed._
 
 **Maintainers:** [jaydenjcpy](https://github.com/jaydenjcpy) & [faroukbmiled](https://github.com/faroukbmiled) & [Mod4](https://github.com/M0d-4) <br />
 **Last Update:** `10/5/26` **Spotify Version:** `9.1.88`
 
-This tweak makes Spotify think you have a Premium subscription, granting free listening, just like Spotilife, and provides some additional features like custom lyrics.
+This edition is for people who **already pay for Spotify Premium**. It does not fake, unlock or patch any subscription feature. It keeps EeveeSpotify's extras: custom lyrics, Liquid Glass, the reimagined home screen, theming, SponsorBlock and more.
+
+What was removed compared to upstream:
+- Bootstrap / customize remote-config rewriting and fake plan pages
+- Forced product-state values and free-tier "unlocks" (liked songs, track rows, Siri radio)
+- Blocking of Spotify's logout, session-invalidation, license and product-state checks
+- Bundled premium configuration blobs
+
+How the Premium check works: the tweak reads the account `type` that Spotify's servers report in the startup (bootstrap) response, read-only and unmodified. Features only activate after that confirms Premium. On free accounts Spotify runs completely stock.
 
 > [!NOTE]
 > The original EeveeSpotify repository was disabled due to a [DMCA takedown](https://github.com/github/dmca/blob/master/2025/08/2025-08-14-spotify.md). This repository will not contain IPA packages in the repo itself.

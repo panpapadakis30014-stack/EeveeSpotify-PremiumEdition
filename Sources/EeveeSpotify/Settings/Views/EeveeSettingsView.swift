@@ -46,7 +46,7 @@ struct EeveeSettingsView: View {
 
     private static let groups: [SettingsGroup] = [
         SettingsGroup(key: "settings_group_listening", entries: [
-            SettingsEntry(key: "patching", icon: "hammer.fill", color: .orange) { AnyView(EeveePatchingSettingsView()) },
+            SettingsEntry(key: "premium_account", icon: "checkmark.seal.fill", color: .green) { AnyView(EeveeAccountSettingsView()) },
             SettingsEntry(key: "lyrics", icon: "quote.bubble.fill", color: .blue) { AnyView(EeveeLyricsSettingsView()) },
             SettingsEntry(key: "sponsorblock", icon: "forward.end.fill", color: .red) { AnyView(SponsorBlockSettingsView()) },
         ]),
