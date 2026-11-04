@@ -173,6 +173,7 @@ struct EeveeSpotify: Tweak {
 
         activateCarPlayCrashFix()
         activateStatefulPlayerCapture()
+        activateStartupPage()
 
         if EeveeSpotify.hookTarget == .v91 {
             if UserDefaults.lyricsSource.isReplacingLyrics {

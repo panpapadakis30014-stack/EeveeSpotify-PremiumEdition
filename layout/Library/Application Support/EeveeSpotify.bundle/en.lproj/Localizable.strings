@@ -535,3 +535,5 @@ lyrics_source_restart_popup = "Restart Spotify so the new lyrics source is used 
 restart_later = "Later";
 premium_account = "Premium Account";
 premium_account_subtitle = "Subscription status";
+premium_extras = "Premium Extras";
+premium_extras_subtitle = "Startup page, lyrics sharing and more";
