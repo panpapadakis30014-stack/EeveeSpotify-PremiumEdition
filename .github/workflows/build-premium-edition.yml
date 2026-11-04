@@ -23,6 +23,8 @@ env:
 jobs:
   build:
     runs-on: macos-latest
+    # Private repo: cap macOS minutes if a step hangs.
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
