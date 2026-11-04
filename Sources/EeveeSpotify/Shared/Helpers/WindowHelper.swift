@@ -14,6 +14,19 @@ struct WindowHelper {
     func present(_ viewController: UIViewController) {
         rootViewController.present(viewController, animated: true)
     }
+
+    // Presents above whatever is already on screen (e.g. the full-screen lyrics view).
+    func presentOnTop(_ viewController: UIViewController) {
+        var top = rootViewController
+        while let presented = top.presentedViewController, !presented.isBeingDismissed {
+            top = presented
+        }
+        if let popover = viewController.popoverPresentationController {
+            popover.sourceView = top.view
+            popover.sourceRect = CGRect(x: top.view.bounds.midX, y: top.view.bounds.midY, width: 0, height: 0)
+        }
+        top.present(viewController, animated: true)
+    }
     
     func findFirstSubview(_ regex: String, in view: UIView) -> UIView? {
         for subview in view.subviews {

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 @available(iOS 15.0, *)
 struct KaraokeLyricsView: View {
@@ -24,7 +25,12 @@ struct KaraokeLyricsView: View {
                         // A new song starts from its own scroll position and state.
                         .id(model.trackId)
                 }
-                closeButton
+                HStack(spacing: 12) {
+                    if let lyrics = model.lyrics, !lyrics.lines.isEmpty {
+                        shareButton(lyrics: lyrics)
+                    }
+                    closeButton
+                }
             }
         }
         .preferredColorScheme(.dark)
@@ -61,6 +67,25 @@ struct KaraokeLyricsView: View {
         } else {
             Circle().fill(Color.white.opacity(0.12))
         }
+    }
+
+    // Premium Edition extra: share the lyrics currently loaded in this view as plain text.
+    private func shareButton(lyrics: KaraokeLyricsDto) -> some View {
+        Button {
+            let text = lyrics.lines
+                .map { $0.plainText.trimmingCharacters(in: .whitespaces) }
+                .joined(separator: "\n")
+            guard !text.isEmpty else { return }
+            let share = UIActivityViewController(activityItems: [text], applicationActivities: nil)
+            WindowHelper.shared.presentOnTop(share)
+        } label: {
+            Image(systemName: "square.and.arrow.up")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundColor(.white.opacity(0.85))
+                .padding(14)
+                .background(closeButtonBackground)
+        }
+        .padding(.top, 50)
     }
 
     private var closeButton: some View {
@@ -105,6 +130,16 @@ private struct KaraokeScrollingLines: View {
                             alignment: alignment
                         )
                         .id(index)
+                        .contextMenu {
+                            if index < lyrics.lines.count {
+                                Button {
+                                    UIPasteboard.general.string = lyrics.lines[index].plainText
+                                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                } label: {
+                                    Label("Copy line", systemImage: "doc.on.doc")
+                                }
+                            }
+                        }
                         .padding(.horizontal, horizontalPadding)
                         .scaleEffect(x: 1, y: flip)
                     }
