@@ -130,8 +130,10 @@ struct EeveeSpotify: Tweak {
         // Always on, read-only: lets PremiumGate see the real account type that
         // Spotify's servers report. Nothing is modified for non-Premium accounts.
         activateNetworkHooks()
+        activatePremiumObserver()
 
         let premiumStatus = PremiumGate.statusAtLaunch
+        _ = tweakInitTime
         writeDebugLog("[INIT] Premium status at launch: \(premiumStatus)")
 
         guard premiumStatus == .premium else {

@@ -14,7 +14,10 @@ enum PremiumAccountStatus: Int {
 enum PremiumGate {
     private static let statusKey = "eeveePremiumAccountStatus"
     private static let lock = NSLock()
-    private static var shownPopUpThisLaunch = false
+    private static var shownVerifiedPopUp = false
+    private static var shownNotPremiumPopUp = false
+
+    enum Source { case bootstrap, productState }
 
     // Status at launch time decides which hook groups get activated in init().
     static let statusAtLaunch: PremiumAccountStatus = storedStatus
@@ -46,24 +49,36 @@ enum PremiumGate {
     }
 
     // Spotify reports "premium" for every paid plan (Individual, Duo, Family, Student).
-    static func record(accountType: String?, catalogue: String?) {
+    static func record(accountType: String?, catalogue: String?, source: Source = .bootstrap) {
         guard accountType != nil || catalogue != nil else { return }
 
         let isPremiumAccount = accountType == "premium" || catalogue == "premium"
+
+        // In-app product state can carry placeholder values right after launch,
+        // so it may only turn the gate ON early; "not premium" from it counts
+        // only once the session has settled. The server bootstrap is authoritative.
+        if !isPremiumAccount && source == .productState
+            && Date().timeIntervalSince(tweakInitTime) < 30 {
+            return
+        }
+
         let newStatus: PremiumAccountStatus = isPremiumAccount ? .premium : .notPremium
 
         lock.lock()
         let previous = storedStatus
         storedStatus = newStatus
-        let alreadyShown = shownPopUpThisLaunch
+        let showVerified = newStatus == .premium && statusAtLaunch != .premium && !shownVerifiedPopUp
+        let showNotPremium = newStatus == .notPremium && !shownNotPremiumPopUp
+        if showVerified { shownVerifiedPopUp = true }
+        if showNotPremium { shownNotPremiumPopUp = true }
         lock.unlock()
 
-        writeDebugLog("[PREMIUM GATE] type=\(accountType ?? "nil") catalogue=\(catalogue ?? "nil") -> \(newStatus) (was \(previous))")
+        if previous != newStatus {
+            NSLog("[EeveeSpotify][PremiumGate] %@ -> %@ (type=%@ catalogue=%@)",
+                  "\(previous)", "\(newStatus)", accountType ?? "nil", catalogue ?? "nil")
+        }
 
-        guard !alreadyShown else { return }
-
-        if newStatus == .premium && statusAtLaunch != .premium {
-            markShown()
+        if showVerified {
             PopUpHelper.showPopUp(
                 delayed: true,
                 message: "Spotify Premium verified. Restart Spotify to enable EeveeSpotify features.",
@@ -72,8 +87,7 @@ enum PremiumGate {
                 onPrimaryClick: { exitApplication() }
             )
         }
-        else if newStatus == .notPremium {
-            markShown()
+        else if showNotPremium {
             PopUpHelper.showPopUp(
                 delayed: true,
                 message: statusAtLaunch == .premium
@@ -82,9 +96,5 @@ enum PremiumGate {
                 buttonText: "OK"
             )
         }
-    }
-
-    private static func markShown() {
-        lock.lock(); shownPopUpThisLaunch = true; lock.unlock()
     }
 }
