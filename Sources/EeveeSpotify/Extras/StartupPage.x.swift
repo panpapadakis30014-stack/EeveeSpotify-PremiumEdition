@@ -38,6 +38,12 @@ class StartupPageLinkDispatcherHook: ClassHook<NSObject> {
 
 func activateStartupPage() {
     guard UserDefaults.extrasOptions.startupPage != .home else { return }
+    // The Liquid Glass tab bar has its own launch tab; let it win so the two never fight.
+    let glass = LiquidGlass.launchOptions
+    if glass.enabled, glass.tabBar, UserDefaults.tabBarOptions.launchTab != nil {
+        writeDebugLog("[StartupPage] Skipped: Liquid Glass launch tab is set")
+        return
+    }
     guard let cls = NSClassFromString(StartupPageLinkDispatcherHook.targetName),
           class_getInstanceMethod(cls, Selector(("setMainUILoaded:"))) != nil else {
         writeDebugLog("[StartupPage] Skipped: link dispatcher API missing")
