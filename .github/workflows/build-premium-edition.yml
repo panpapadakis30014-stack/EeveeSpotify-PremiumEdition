@@ -7,6 +7,15 @@ on:
         default: "Master"
         required: true
         type: string
+      runner:
+        description: "macOS runner image (try another if the queue stalls)"
+        default: "macos-15"
+        required: false
+        type: choice
+        options:
+          - macos-15
+          - macos-26
+          - macos-latest
       ipa_release_tag:
         description: "Tag of a release in THIS (private) repo holding the decrypted Spotify IPA as an asset (empty = build .deb only)"
         default: ""
@@ -22,7 +31,7 @@ env:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: ${{ inputs.runner || 'macos-15' }}
     # Private repo: cap macOS minutes if a step hangs.
     timeout-minutes: 60
     steps:
