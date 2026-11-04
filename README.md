@@ -31,6 +31,12 @@ How the Premium check works: the tweak reads the account `type` that Spotify's s
 
 <sup>*Musixmatch requires you to input a user token to retrieve lyrics. EeveeSpotifyReincarnated supports requesting an Anonymous Token to retrieve this functionality.</sup>
 
+## Building the Premium Edition (private repo)
+
+1. Create a release in this private repo (any tag, e.g. `ipa`) and attach your decrypted Spotify `.ipa` as an asset.
+2. Run the **Build Premium Edition** workflow with `ipa_release_tag` set to that tag (leave it empty to build only the `.deb`).
+3. Download the `EeveeSpotify-PremiumEdition-IPA` artifact and sideload it.
+
 ## How to build an EeveeSpotify IPA using Github actions
 > [!NOTE]
 > If this your first time, complete following steps before starting:
