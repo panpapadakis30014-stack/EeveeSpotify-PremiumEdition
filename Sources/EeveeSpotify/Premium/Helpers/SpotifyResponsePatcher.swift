@@ -60,6 +60,7 @@ enum SpotifyResponsePatcher {
     // Returning nil makes the caller replay the original, unmodified bytes.
     static func patch(url: URL, buffer: Data) throws -> PatchResult? {
         if url.isBootstrap {
+            PremiumDiag.note("bootstrap seen \(url.path) bytes=\(buffer.count)")
             if let message = try? BootstrapMessage(serializedBytes: buffer) {
                 let attributes = message.attributes
                 PremiumGate.record(

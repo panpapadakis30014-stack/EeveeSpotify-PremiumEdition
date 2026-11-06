@@ -18,6 +18,7 @@ class HttpClientURLSessionHook: ClassHook<NSObject>, SpotifySessionDelegate {
             orig.URLSession(session, task: task, didCompleteWithError: error)
             return
         }
+        PremiumDiag.seen(url)
 
         if CasitaResponseProbe.shouldProbe(url) {
             CasitaResponseProbe.flush(task, url: url)

@@ -133,6 +133,7 @@ struct EeveeSpotify: Tweak {
         activatePremiumObserver()
 
         let premiumStatus = PremiumGate.statusAtLaunch
+        PremiumDiag.note("launch: Spotify \(EeveeSpotify.spotifyVersion), premium status at launch = \(premiumStatus)")
         _ = tweakInitTime
         writeDebugLog("[INIT] Premium status at launch: \(premiumStatus)")
 

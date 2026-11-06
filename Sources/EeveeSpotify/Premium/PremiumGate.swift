@@ -59,6 +59,7 @@ enum PremiumGate {
         // only once the session has settled. The server bootstrap is authoritative.
         if !isPremiumAccount && source == .productState
             && Date().timeIntervalSince(tweakInitTime) < 30 {
+            PremiumDiag.note("ignored early non-premium product state (type=\(accountType ?? "nil"))")
             return
         }
 
@@ -74,8 +75,7 @@ enum PremiumGate {
         lock.unlock()
 
         if previous != newStatus {
-            NSLog("[EeveeSpotify][PremiumGate] %@ -> %@ (type=%@ catalogue=%@)",
-                  "\(previous)", "\(newStatus)", accountType ?? "nil", catalogue ?? "nil")
+            PremiumDiag.note("gate \(previous) -> \(newStatus) via \(source) (type=\(accountType ?? "nil") catalogue=\(catalogue ?? "nil"))")
         }
 
         if showVerified {
