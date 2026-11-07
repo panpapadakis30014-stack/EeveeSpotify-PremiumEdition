@@ -26,7 +26,7 @@ extension UserDefaults {
 
 enum HomeDeclutter {
     // Music-only mode (Premium Extras) adds podcasts on top of the Home page's own choices.
-    static let hidden = Set(UserDefaults.homeHidden).union(UserDefaults.extrasOptions.hidePodcasts ? [.podcasts] : [])
+    static let hidden = Set(UserDefaults.homeHidden).union(UserDefaults.extrasOptions.hidePodcasts && !ExtrasSafety.safeMode ? [.podcasts] : [])
     private static var diagnosed = 0
 
     // Shelf titles and card subtitles that mark spoken-word content (English + Greek).

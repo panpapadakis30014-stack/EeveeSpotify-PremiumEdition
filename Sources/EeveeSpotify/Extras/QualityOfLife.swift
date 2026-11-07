@@ -22,6 +22,7 @@ enum QualityOfLife {
             }
         }
         KeepAwake.start()
+        ListeningLog.start()
     }
 }
 
@@ -61,11 +62,13 @@ private enum ResumeOnLaunch {
     }
 }
 
-// Keeps the screen on while music plays and the phone is charging: a bedside or
-// dashboard display. Lets the screen sleep again as soon as either stops.
+// Keeps the screen on while music plays and the phone is charging (a bedside or dashboard
+// display), and while the custom lyrics view is open. Lets the screen sleep again as soon as
+// neither applies. Only ever turns off what it turned on itself.
 enum KeepAwake {
     private static var timer: Timer?
     private static var applied = false
+    private static var lyricsOpen = false
     private static let observer = NotificationCenter.default.addObserver(
         forName: .eeveeExtrasChanged, object: nil, queue: .main
     ) { _ in refreshTimer() }
@@ -75,8 +78,19 @@ enum KeepAwake {
         refreshTimer()
     }
 
+    // Called by the lyrics view as it appears and disappears.
+    static func setLyricsOpen(_ open: Bool) {
+        let apply = {
+            lyricsOpen = open
+            refreshTimer()
+            step()
+        }
+        if Thread.isMainThread { apply() } else { DispatchQueue.main.async(execute: apply) }
+    }
+
     private static func refreshTimer() {
-        let enabled = UserDefaults.extrasOptions.awakeWhileCharging
+        let options = UserDefaults.extrasOptionsCached
+        let enabled = !ExtrasSafety.safeMode && (options.awakeWhileCharging || (options.lyricsAwake && lyricsOpen))
         if enabled, timer == nil {
             UIDevice.current.isBatteryMonitoringEnabled = true
             let tick = Timer(timeInterval: 3, repeats: true) { _ in step() }
@@ -92,9 +106,16 @@ enum KeepAwake {
     }
 
     private static func step() {
-        let charging = [.charging, .full].contains(UIDevice.current.batteryState)
+        let options = UserDefaults.extrasOptionsCached
+        guard !ExtrasSafety.safeMode, UIApplication.shared.applicationState == .active else {
+            set(false)
+            return
+        }
+        let charging = [UIDevice.BatteryState.charging, .full].contains(UIDevice.current.batteryState)
         let playing = SpotifyPlayback.info != nil && !SpotifyPlayback.isPaused
-        set(charging && playing && UIApplication.shared.applicationState == .active)
+        let forCharging = options.awakeWhileCharging && charging && playing
+        let forLyrics = options.lyricsAwake && lyricsOpen
+        set(forCharging || forLyrics)
     }
 
     private static func set(_ awake: Bool) {

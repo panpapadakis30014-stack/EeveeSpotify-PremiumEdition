@@ -12,6 +12,7 @@ final class GlassSystemTabBar: UITabBar, UITabBarDelegate {
 
     func tabBar(_ tabBar: UITabBar, didSelect item: UITabBarItem) {
         guard let index = items?.firstIndex(of: item), index < sources.count else { return }
+        TabHaptics.selectionChanged()
         switch sources[index] {
         case .stock(let source):
             CustomTabs.deselect()
@@ -25,6 +26,21 @@ final class GlassSystemTabBar: UITabBar, UITabBarDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             if let stock = self?.stock { GlassTabBar.sync(stock) }
         }
+    }
+}
+
+// A light tick on tab switches (Premium Extras → Tab bar haptics).
+enum TabHaptics {
+    private static var enabled = UserDefaults.extrasOptions.tabHaptics
+    private static let generator = UISelectionFeedbackGenerator()
+    private static let observer = NotificationCenter.default.addObserver(
+        forName: .eeveeExtrasChanged, object: nil, queue: .main
+    ) { _ in enabled = UserDefaults.extrasOptions.tabHaptics }
+
+    static func selectionChanged() {
+        _ = observer
+        guard enabled, !ExtrasSafety.safeMode else { return }
+        generator.selectionChanged()
     }
 }
 
@@ -231,19 +247,27 @@ enum GlassTabBar {
     static func barFrame(in stock: UIView) -> CGRect {
         let bounds = stock.bounds
         guard bounds.height > 0 else { return bounds }
-        guard UIDevice.current.userInterfaceIdiom == .phone, let window = stock.window else {
-            guard bounds.height < minimumBarHeight else { return bounds }
-            return CGRect(x: bounds.minX, y: bounds.midY - minimumBarHeight / 2,
-                          width: bounds.width, height: minimumBarHeight)
-        }
+        guard !ExtrasSafety.safeMode, UIDevice.current.userInterfaceIdiom == .phone,
+              let window = stock.window, bounds.width >= 200 else { return stockFrame(bounds) }
         let height = phoneBarHeight + window.safeAreaInsets.bottom
         let screenBottom = stock.convert(CGPoint(x: 0, y: window.bounds.maxY), from: window).y
-        // Spotify's bar normally ends at the screen's bottom edge; follow it there unless it has been
-        // moved far away (a sheet or a transition), where the old behaviour is the safer choice.
-        let bottom = abs(screenBottom - bounds.maxY) < 160 ? screenBottom : bounds.maxY
-        let frame = CGRect(x: bounds.minX, y: bottom - height, width: bounds.width, height: height)
+        let gap = screenBottom - bounds.maxY
+        // Pin to the screen's bottom edge only while Spotify's bar ends at or a little above it
+        // (the offline squeeze). If Spotify slides its bar down to hide it, or anything else looks
+        // unusual, the glass bar simply follows Spotify's frame as it always did.
+        guard height >= 40, height <= 140, gap >= -1, gap < 160, bounds.maxY - height > -400 else {
+            return stockFrame(bounds)
+        }
+        let frame = CGRect(x: bounds.minX, y: screenBottom - height, width: bounds.width, height: height)
         noteShape(stock, frame: frame, window: window)
         return frame
+    }
+
+    // The original behaviour: Spotify's own frame, with a height floor for the iPad strip.
+    private static func stockFrame(_ bounds: CGRect) -> CGRect {
+        guard bounds.height < minimumBarHeight else { return bounds }
+        return CGRect(x: bounds.minX, y: bounds.midY - minimumBarHeight / 2,
+                      width: bounds.width, height: minimumBarHeight)
     }
 
     // Records what Spotify's bar looks like whenever its size changes (online vs offline), for read_diag.
@@ -352,6 +376,16 @@ class GlassTabBarViewHook: ClassHook<UIView> {
         activateGlassCustomTabs()
         GlassTabBar.meter.measure { GlassTabBar.sync(target) }
     }
+}
+
+// Hit-testing and re-fitting live in their own groups, activated only once the classes are
+// confirmed to be the UIKit kinds they're expected to be (see activateGlassTabBarExtras).
+struct GlassTabBarHitGroup: HookGroup {}
+struct GlassTabBarRefitGroup: HookGroup {}
+
+class GlassTabBarHitHook: ClassHook<UIView> {
+    typealias Group = GlassTabBarHitGroup
+    static let targetName = GlassTabBarViewHook.targetName
 
     @objc(pointInside:withEvent:)
     func pointInside(_ point: CGPoint, withEvent event: UIEvent?) -> Bool {
@@ -361,15 +395,33 @@ class GlassTabBarViewHook: ClassHook<UIView> {
     }
 }
 
-class GlassTabBarContainerHook: ClassHook<UIViewController> {
-    typealias Group = GlassTabBarGroup
-    static let targetName = "_TtC23NavigationUI_TabBarImpl19TabBarContainerImpl"
+class GlassTabBarRefitHook: ClassHook<UIViewController> {
+    typealias Group = GlassTabBarRefitGroup
+    static let targetName = GlassTabBarContainerHook.targetName
 
     func viewDidLayoutSubviews() {
         orig.viewDidLayoutSubviews()
         guard #available(iOS 26.0, *) else { return }
         GlassTabBar.refit()
     }
+}
+
+func activateGlassTabBarExtras() {
+    guard !ExtrasSafety.safeMode else { return }
+    func isKind(_ name: String, _ base: AnyClass) -> Bool {
+        (NSClassFromString(name) as? NSObject.Type)?.isSubclass(of: base) == true
+    }
+    if isKind(GlassTabBarHitHook.targetName, UIView.self) { GlassTabBarHitGroup().activate() }
+    if isKind(GlassTabBarRefitHook.targetName, UIViewController.self),
+       let cls = NSClassFromString(GlassTabBarRefitHook.targetName),
+       class_getInstanceMethod(cls, #selector(UIViewController.viewDidLayoutSubviews)) != nil {
+        GlassTabBarRefitGroup().activate()
+    }
+}
+
+class GlassTabBarContainerHook: ClassHook<UIViewController> {
+    typealias Group = GlassTabBarGroup
+    static let targetName = "_TtC23NavigationUI_TabBarImpl19TabBarContainerImpl"
 
     func setSelectedViewController(_ controller: UIViewController) {
         orig.setSelectedViewController(controller)

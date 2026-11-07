@@ -144,6 +144,9 @@ struct EeveeSpotify: Tweak {
             return
         }
 
+        // Decides whether the Premium Extras run this launch (crash-loop guard).
+        ExtrasSafety.begin()
+
         activateTelemetryBlock()
         activateTheme()
         activateLiquidGlass()
@@ -176,9 +179,13 @@ struct EeveeSpotify: Tweak {
         activateStatefulPlayerCapture()
         activateStartupPage()
         activateSpotifyNavigator()
-        activateEeveeHome()
-        SleepFade.activate()
-        QualityOfLife.activate()
+        if ExtrasSafety.safeMode {
+            writeDebugLog("[INIT] Premium Extras paused (safe mode)")
+        } else {
+            activateEeveeHome()
+            SleepFade.activate()
+            QualityOfLife.activate()
+        }
 
         if EeveeSpotify.hookTarget == .v91 {
             if UserDefaults.lyricsSource.isReplacingLyrics {

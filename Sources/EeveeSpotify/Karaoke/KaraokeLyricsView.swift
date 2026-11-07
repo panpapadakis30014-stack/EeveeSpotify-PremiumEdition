@@ -34,6 +34,9 @@ struct KaraokeLyricsView: View {
             }
         }
         .preferredColorScheme(.dark)
+        // Premium Extras → keep the screen on while lyrics are open.
+        .onAppear { KeepAwake.setLyricsOpen(true) }
+        .onDisappear { KeepAwake.setLyricsOpen(false) }
     }
 
     private func content(lyrics: KaraokeLyricsDto, layouts: [KaraokeLineLayout], screenWidth: CGFloat) -> some View {

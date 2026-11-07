@@ -25,7 +25,7 @@ class EeveeHomePageHook: ClassHook<UIViewController> {
 
 func activateEeveeHome() {
     let options = ExtrasOptions.launch
-    guard options.eeveeHome, options.homeGreeting || options.homeHero || options.homeTiles || !options.pinned.isEmpty else { return }
+    guard options.eeveeHome, HomeSection.allCases.contains(where: options.shows) else { return }
     guard NSClassFromString(EeveeHomePageHook.targetName) != nil else {
         PremiumDiag.note("eevee home: page class missing")
         return
@@ -74,9 +74,11 @@ enum EeveeHome {
             state.list = list
             // Spotify also resets the inset outside layout (pull to refresh, the pill bar); putting
             // ours back in the same pass keeps the feed from sliding under the header for a frame.
+            // Only the inset is restored from here: this can fire inside Spotify's own collection
+            // view updates, where moving the scroll position is not safe.
             state.insetWatch = list.observe(\.contentInset, options: [.new]) { [weak state] list, _ in
                 guard let state else { return }
-                apply(state, to: list)
+                apply(state, to: list, adjustOffset: false)
             }
             state.header.onHeightChange = { [weak state, weak list] in
                 guard let state, let list else { return }
@@ -86,7 +88,7 @@ enum EeveeHome {
         apply(state, to: list)
     }
 
-    private static func apply(_ state: Install, to list: UICollectionView) {
+    private static func apply(_ state: Install, to list: UICollectionView, adjustOffset: Bool = true) {
         guard !state.applying else { return }
         state.applying = true
         defer { state.applying = false }
@@ -101,7 +103,7 @@ enum EeveeHome {
         if current != wanted {
             let atTop = list.contentOffset.y <= -list.adjustedContentInset.top + 2
             list.contentInset.top = wanted
-            if atTop || !state.scrolledToTop {
+            if adjustOffset, atTop || !state.scrolledToTop {
                 list.contentOffset.y = -list.adjustedContentInset.top
                 state.scrolledToTop = true
             }
@@ -234,14 +236,24 @@ final class EeveeHomeHeader: UIView {
     private let subline = UILabel()
     private let hero = HeroCard()
     private var tiles: [HomeTile] = []
-    private let pinnedTitle = UILabel()
+    private let recentsHeader = SectionHeader(title: "Jump back in", action: "See all")
+    private let recentsScroll = UIScrollView()
+    private var recentCards: [RecentCard] = []
+    private let pinnedHeader = SectionHeader(title: "Pinned", action: nil)
     private let pinnedScroll = UIScrollView()
     private var pinnedChips: [PinChip] = []
+    private let statsHeader = SectionHeader(title: "Your listening", action: nil)
+    private let statsCard = StatsCard()
     private var options = UserDefaults.extrasOptions
     private var ticker: Timer?
+    private var ticks = 0
     private var appeared = false
     private var offline = Connectivity.isOffline
     private var lastHeight: CGFloat?
+
+    private static let sectionGap: CGFloat = 24
+    private static let headerGap: CGFloat = 10
+    private static let maxRecents = 10
 
     private static let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -273,29 +285,39 @@ final class EeveeHomeHeader: UIView {
             return tile
         }
 
-        pinnedTitle.text = "Pinned"
-        pinnedTitle.textColor = Style.primary
-        pinnedTitle.accessibilityTraits = .header
-        addSubview(pinnedTitle)
-        pinnedScroll.showsHorizontalScrollIndicator = false
-        pinnedScroll.alwaysBounceHorizontal = true
-        pinnedScroll.clipsToBounds = false
-        addSubview(pinnedScroll)
+        for scroll in [recentsScroll, pinnedScroll] {
+            scroll.showsHorizontalScrollIndicator = false
+            scroll.alwaysBounceHorizontal = true
+            scroll.clipsToBounds = false
+            scroll.decelerationRate = .fast
+        }
+        recentsHeader.onAction = {
+            Haptics.tap()
+            SpotifyNavigator.open("spotify:recently-played")
+        }
+        [recentsHeader, recentsScroll, pinnedHeader, pinnedScroll, statsHeader, statsCard].forEach(addSubview)
 
         applyFonts()
         rebuildPins()
+        rebuildRecents()
+        statsCard.update(ListeningLog.summary)
         hero.actionsEnabled = options.heroActions
         hero.tintsFromArtwork = options.homeArtworkTint
 
         let center = NotificationCenter.default
         center.addObserver(self, selector: #selector(optionsChanged), name: .eeveeExtrasChanged, object: nil)
         center.addObserver(self, selector: #selector(connectivityChanged), name: .eeveeConnectivityChanged, object: nil)
+        center.addObserver(self, selector: #selector(listeningChanged), name: .eeveeListeningChanged, object: nil)
         center.addObserver(self, selector: #selector(textSizeChanged), name: UIContentSizeCategory.didChangeNotification, object: nil)
         center.addObserver(self, selector: #selector(refresh), name: UIApplication.didBecomeActiveNotification, object: nil)
         refresh()
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    deinit {
+        ticker?.invalidate()
+    }
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
@@ -306,7 +328,13 @@ final class EeveeHomeHeader: UIView {
         refresh()
         hero.windowDidChange()
         Haptics.prepare()
-        let tick = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.refresh() }
+        let tick = Timer(timeInterval: 1, repeats: true) { [weak self] timer in
+            guard let self else {
+                timer.invalidate()
+                return
+            }
+            self.refresh()
+        }
         tick.tolerance = 0.2
         RunLoop.main.add(tick, forMode: .common)
         ticker = tick
@@ -317,11 +345,132 @@ final class EeveeHomeHeader: UIView {
         }
     }
 
+    // MARK: Sections
+
+    private var sections: [HomeSection] {
+        options.orderedSections.filter { section in
+            guard options.shows(section) else { return false }
+            switch section {
+            case .recents: return !recentCards.isEmpty
+            case .pinned: return !pinnedChips.isEmpty
+            default: return true
+            }
+        }
+    }
+
+    private func views(of section: HomeSection) -> [UIView] {
+        switch section {
+        case .greeting: return [greeting, sublineIcon, subline]
+        case .nowPlaying: return [hero]
+        case .shortcuts: return tiles
+        case .recents: return [recentsHeader, recentsScroll]
+        case .pinned: return [pinnedHeader, pinnedScroll]
+        case .stats: return [statsHeader, statsCard]
+        }
+    }
+
+    private func sectionHeight(_ section: HomeSection, width: CGFloat) -> CGFloat {
+        let headed = ceil(SectionHeader.height) + Self.headerGap
+        switch section {
+        case .greeting: return ceil(greeting.font.lineHeight) + 2 + ceil(subline.font.lineHeight)
+        case .nowPlaying: return HeroCard.preferredHeight(for: width)
+        case .shortcuts: return HomeTile.preferredHeight * 2 + 10
+        case .recents: return headed + RecentCard.height
+        case .pinned: return headed + PinChip.height
+        case .stats: return headed + StatsCard.preferredHeight
+        }
+    }
+
+    func preferredHeight(for width: CGFloat) -> CGFloat {
+        let content = max(0, width - Style.margin * 2)
+        let shown = sections
+        var total: CGFloat = 4
+        for (index, section) in shown.enumerated() {
+            total += sectionHeight(section, width: content)
+            if index < shown.count - 1 { total += section == .greeting ? 16 : Self.sectionGap }
+        }
+        let rounded = ceil(total + 14)
+        lastHeight = rounded
+        return rounded
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let m = Style.margin
+        let w = bounds.width - m * 2
+        let shown = sections
+        for section in HomeSection.allCases where !shown.contains(section) {
+            views(of: section).forEach { $0.isHidden = true }
+        }
+
+        var y: CGFloat = 4
+        for section in shown {
+            let height = sectionHeight(section, width: w)
+            views(of: section).forEach { $0.isHidden = false }
+            switch section {
+            case .greeting: layoutGreeting(y: y, width: w)
+            case .nowPlaying: Style.place(hero, CGRect(x: m, y: y, width: w, height: height))
+            case .shortcuts: layoutTiles(y: y, width: w)
+            case .recents: layoutRow(recentsHeader, recentsScroll, recentCards, y: y, width: w, itemHeight: RecentCard.height, spacing: 12)
+            case .pinned: layoutRow(pinnedHeader, pinnedScroll, pinnedChips, y: y, width: w, itemHeight: PinChip.height, spacing: 8)
+            case .stats:
+                let top = y + ceil(SectionHeader.height) + Self.headerGap
+                Style.place(statsHeader, CGRect(x: m, y: y, width: w, height: ceil(SectionHeader.height)))
+                Style.place(statsCard, CGRect(x: m, y: top, width: w, height: StatsCard.preferredHeight))
+            }
+            y += height + (section == .greeting ? 16 : Self.sectionGap)
+        }
+    }
+
+    private func layoutGreeting(y: CGFloat, width w: CGFloat) {
+        let m = Style.margin
+        let titleHeight = ceil(greeting.font.lineHeight)
+        Style.place(greeting, CGRect(x: m, y: y, width: w, height: titleHeight))
+        let lineY = y + titleHeight + 2
+        let lineHeight = ceil(subline.font.lineHeight)
+        sublineIcon.isHidden = !offline
+        let iconWidth: CGFloat = offline ? lineHeight + 2 : 0
+        Style.place(sublineIcon, CGRect(x: m, y: lineY, width: lineHeight, height: lineHeight))
+        Style.place(subline, CGRect(x: m + iconWidth, y: lineY, width: w - iconWidth, height: lineHeight))
+    }
+
+    private func layoutTiles(y: CGFloat, width w: CGFloat) {
+        let m = Style.margin
+        let columns: CGFloat = 3
+        let spacing: CGFloat = 10
+        let tileWidth = floor((w - spacing * (columns - 1)) / columns)
+        let height = HomeTile.preferredHeight
+        // Offline, Downloads moves to the front: it's the one place that still plays.
+        let ordered = offline
+            ? tiles.sorted { ($0.kind == .downloads ? 0 : 1, $0.kind.order) < ($1.kind == .downloads ? 0 : 1, $1.kind.order) }
+            : tiles
+        for (index, tile) in ordered.enumerated() {
+            let row = CGFloat(index / 3), column = CGFloat(index % 3)
+            Style.place(tile, CGRect(x: m + column * (tileWidth + spacing), y: y + row * (height + spacing),
+                                     width: tileWidth, height: height))
+        }
+    }
+
+    private func layoutRow(_ header: SectionHeader, _ scroll: UIScrollView, _ items: [UIView],
+                           y: CGFloat, width w: CGFloat, itemHeight: CGFloat, spacing: CGFloat) {
+        let m = Style.margin
+        let headerHeight = ceil(SectionHeader.height)
+        Style.place(header, CGRect(x: m, y: y, width: w, height: headerHeight))
+        Style.place(scroll, CGRect(x: 0, y: y + headerHeight + Self.headerGap, width: bounds.width, height: itemHeight))
+        var x = m
+        for item in items {
+            let size = item.sizeThatFits(CGSize(width: 240, height: itemHeight))
+            Style.place(item, CGRect(x: x, y: 0, width: size.width, height: itemHeight))
+            x += size.width + spacing
+        }
+        scroll.contentSize = CGSize(width: max(bounds.width, x + m - spacing), height: itemHeight)
+    }
+
     // Sections rise into place one after another the first time Home appears.
     private func playEntrance() {
-        let sections: [[UIView]] = [[greeting, sublineIcon, subline], [hero], tiles, [pinnedTitle, pinnedScroll]]
         var delay: TimeInterval = 0
-        for group in sections {
+        for section in sections {
+            let group = views(of: section)
             for view in group where !view.isHidden {
                 view.alpha = 0
                 if !Style.reduceMotion { view.transform = CGAffineTransform(translationX: 0, y: 14).scaledBy(x: 0.98, y: 0.98) }
@@ -334,6 +483,8 @@ final class EeveeHomeHeader: UIView {
             delay += Style.reduceMotion ? 0 : 0.06
         }
     }
+
+    // MARK: Changes
 
     @objc private func optionsChanged() {
         let old = options
@@ -355,10 +506,20 @@ final class EeveeHomeHeader: UIView {
         Style.spring { self.layoutIfNeeded() }
     }
 
+    @objc private func listeningChanged() {
+        rebuildRecents()
+        statsCard.update(ListeningLog.summary)
+        setNeedsLayout()
+        heightMayHaveChanged()
+    }
+
     @objc private func textSizeChanged() {
         applyFonts()
         tiles.forEach { $0.applyFonts() }
         pinnedChips.forEach { $0.applyFonts() }
+        recentCards.forEach { $0.applyFonts() }
+        [recentsHeader, pinnedHeader, statsHeader].forEach { $0.applyFonts() }
+        statsCard.applyFonts()
         hero.applyFonts()
         setNeedsLayout()
         heightMayHaveChanged()
@@ -374,89 +535,14 @@ final class EeveeHomeHeader: UIView {
     private func applyFonts() {
         greeting.font = Style.font(.largeTitle, 32, .heavy, rounded: true, max: 44)
         subline.font = Style.font(.subheadline, 14, .semibold, max: 19)
-        pinnedTitle.font = Style.font(.title3, 19, .bold, rounded: true, max: 25)
         sublineIcon.image = Style.symbol("wifi.slash", subline.font.pointSize * 0.85)
-    }
-
-    private var showsPins: Bool { !options.pinned.isEmpty }
-    private var greetingHeight: CGFloat { ceil(greeting.font.lineHeight) + 2 + ceil(subline.font.lineHeight) }
-
-    func preferredHeight(for width: CGFloat) -> CGFloat {
-        let content = max(0, width - Style.margin * 2)
-        var height: CGFloat = 4
-        if options.homeGreeting { height += greetingHeight + 18 }
-        if options.homeHero { height += HeroCard.preferredHeight(for: content) + 16 }
-        if options.homeTiles { height += HomeTile.preferredHeight * 2 + 10 + 20 }
-        if showsPins { height += ceil(pinnedTitle.font.lineHeight) + 10 + PinChip.height + 16 }
-        let rounded = ceil(height + 6)
-        lastHeight = rounded
-        return rounded
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        let m = Style.margin
-        let w = bounds.width - m * 2
-        var y: CGFloat = 4
-
-        [greeting, sublineIcon, subline].forEach { $0.isHidden = !options.homeGreeting }
-        if options.homeGreeting {
-            let titleHeight = ceil(greeting.font.lineHeight)
-            Style.place(greeting, CGRect(x: m, y: y, width: w, height: titleHeight))
-            let lineY = y + titleHeight + 2
-            let lineHeight = ceil(subline.font.lineHeight)
-            sublineIcon.isHidden = !offline
-            let iconWidth: CGFloat = offline ? lineHeight + 2 : 0
-            Style.place(sublineIcon, CGRect(x: m, y: lineY, width: lineHeight, height: lineHeight))
-            Style.place(subline, CGRect(x: m + iconWidth, y: lineY, width: w - iconWidth, height: lineHeight))
-            y += greetingHeight + 18
-        }
-
-        hero.isHidden = !options.homeHero
-        if options.homeHero {
-            let height = HeroCard.preferredHeight(for: w)
-            Style.place(hero, CGRect(x: m, y: y, width: w, height: height))
-            y += height + 16
-        }
-
-        tiles.forEach { $0.isHidden = !options.homeTiles }
-        if options.homeTiles {
-            let columns: CGFloat = 3
-            let spacing: CGFloat = 10
-            let tileWidth = floor((w - spacing * (columns - 1)) / columns)
-            let height = HomeTile.preferredHeight
-            // Offline, Downloads moves to the front: it's the one place that still plays.
-            let ordered = offline
-                ? tiles.sorted { ($0.kind == .downloads ? 0 : 1, $0.kind.order) < ($1.kind == .downloads ? 0 : 1, $1.kind.order) }
-                : tiles
-            for (index, tile) in ordered.enumerated() {
-                let row = CGFloat(index / 3), column = CGFloat(index % 3)
-                Style.place(tile, CGRect(x: m + column * (tileWidth + spacing), y: y + row * (height + spacing),
-                                         width: tileWidth, height: height))
-            }
-            y += height * 2 + spacing + 20
-        }
-
-        pinnedTitle.isHidden = !showsPins
-        pinnedScroll.isHidden = !showsPins
-        if showsPins {
-            let titleHeight = ceil(pinnedTitle.font.lineHeight)
-            Style.place(pinnedTitle, CGRect(x: m, y: y, width: w, height: titleHeight))
-            Style.place(pinnedScroll, CGRect(x: 0, y: y + titleHeight + 10, width: bounds.width, height: PinChip.height))
-            var x = m
-            for chip in pinnedChips {
-                let size = chip.sizeThatFits(CGSize(width: 240, height: PinChip.height))
-                Style.place(chip, CGRect(x: x, y: 0, width: size.width, height: PinChip.height))
-                x += size.width + 8
-            }
-            pinnedScroll.contentSize = CGSize(width: x + m - 8, height: PinChip.height)
-        }
     }
 
     // MARK: Content
 
     @objc private func refresh() {
         guard window != nil || superview == nil else { return }
+        ticks += 1
         if options.homeGreeting {
             let hour = Calendar.current.component(.hour, from: Date())
             let text: String
@@ -477,6 +563,9 @@ final class EeveeHomeHeader: UIView {
             let pinned = info?.contextURI.map { uri in options.pinned.contains { $0.uri == uri } } ?? false
             hero.update(info, pinned: pinned, timing: info == nil ? nil : SpotifyPlayback.timing)
         }
+
+        // Today's total ticks along while music plays.
+        if options.shows(.stats), ticks % 15 == 0 { statsCard.update(ListeningLog.summary) }
 
         guard options.homeTiles else { return }
         for tile in tiles {
@@ -503,16 +592,7 @@ final class EeveeHomeHeader: UIView {
 
     private func togglePin() {
         guard let info = SpotifyPlayback.info, let uri = info.contextURI, !uri.isEmpty else { return }
-        var options = UserDefaults.extrasOptions
-        if let index = options.pinned.firstIndex(where: { $0.uri == uri }) {
-            options.pinned.remove(at: index)
-            Haptics.soft()
-        } else {
-            options.pinned.insert(PinnedItem(uri: uri, title: info.contextTitle ?? info.albumTitle ?? info.title), at: 0)
-            Haptics.success()
-        }
-        UserDefaults.extrasOptions = options
-        NotificationCenter.default.post(name: .eeveeExtrasChanged, object: nil)
+        Pins.toggle(uri: uri, title: info.contextTitle ?? info.albumTitle ?? info.title)
     }
 
     private func rebuildPins() {
@@ -522,17 +602,99 @@ final class EeveeHomeHeader: UIView {
             let chip = PinChip(item)
             pinnedScroll.addSubview(chip)
             // New pins pop in; existing ones just move.
-            if appeared, !previous.contains(item.uri) {
-                chip.alpha = 0
-                chip.transform = Style.reduceMotion ? .identity : CGAffineTransform(scaleX: 0.7, y: 0.7)
-                Style.spring(0.05) {
-                    chip.alpha = 1
-                    chip.transform = .identity
-                }
-            }
+            if appeared, !previous.contains(item.uri) { popIn(chip) }
             return chip
         }
     }
+
+    private func rebuildRecents() {
+        let wanted = Array(ListeningLog.recents.prefix(Self.maxRecents))
+        guard wanted != recentCards.map(\.entry) else { return }
+        let previous = Set(recentCards.map(\.entry.uri))
+        let reusable = Dictionary(recentCards.map { ($0.entry.uri, $0) }) { first, _ in first }
+        recentCards = wanted.map { entry in
+            if let card = reusable[entry.uri], card.entry == entry { return card }
+            reusable[entry.uri]?.removeFromSuperview()
+            let card = RecentCard(entry)
+            recentsScroll.addSubview(card)
+            if appeared, !previous.contains(entry.uri) { popIn(card) }
+            return card
+        }
+        let kept = Set(recentCards.map { ObjectIdentifier($0) })
+        recentsScroll.subviews.compactMap { $0 as? RecentCard }.filter { !kept.contains(ObjectIdentifier($0)) }.forEach { $0.removeFromSuperview() }
+        if appeared { Style.spring { self.layoutIfNeeded() } }
+    }
+
+    private func popIn(_ view: UIView) {
+        view.alpha = 0
+        view.transform = Style.reduceMotion ? .identity : CGAffineTransform(scaleX: 0.7, y: 0.7)
+        Style.spring(0.05) {
+            view.alpha = 1
+            view.transform = .identity
+        }
+    }
+}
+
+// Pin/unpin from anywhere on Home.
+private enum Pins {
+    static func contains(_ uri: String) -> Bool {
+        UserDefaults.extrasOptions.pinned.contains { $0.uri == uri }
+    }
+
+    static func toggle(uri: String, title: String) {
+        var options = UserDefaults.extrasOptions
+        if let index = options.pinned.firstIndex(where: { $0.uri == uri }) {
+            options.pinned.remove(at: index)
+            Haptics.soft()
+        } else {
+            options.pinned.insert(PinnedItem(uri: uri, title: title), at: 0)
+            Haptics.success()
+        }
+        UserDefaults.extrasOptions = options
+        NotificationCenter.default.post(name: .eeveeExtrasChanged, object: nil)
+    }
+}
+
+// A section title with an optional trailing link ("See all").
+private final class SectionHeader: UIView {
+    var onAction: (() -> Void)?
+    private let title = UILabel()
+    private let button = UIButton(type: .system)
+
+    static var height: CGFloat { titleFont.lineHeight }
+    private static var titleFont: UIFont { Style.font(.title3, 20, .bold, rounded: true, max: 26) }
+
+    init(title text: String, action: String?) {
+        super.init(frame: .zero)
+        title.text = text
+        title.textColor = Style.primary
+        title.accessibilityTraits = .header
+        addSubview(title)
+        if let action {
+            button.setTitle(action, for: .normal)
+            button.tintColor = Style.secondary
+            button.addTarget(self, action: #selector(tapped), for: .touchUpInside)
+            addSubview(button)
+        }
+        applyFonts()
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func applyFonts() {
+        title.font = Self.titleFont
+        button.titleLabel?.font = Style.font(.subheadline, 14, .semibold, max: 18)
+        setNeedsLayout()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let buttonWidth = button.superview == nil ? 0 : ceil(button.sizeThatFits(bounds.size).width)
+        button.frame = CGRect(x: bounds.width - buttonWidth, y: 0, width: buttonWidth, height: bounds.height)
+        title.frame = CGRect(x: 0, y: 0, width: bounds.width - buttonWidth - 8, height: bounds.height)
+    }
+
+    @objc private func tapped() { onAction?() }
 }
 
 // MARK: - Glass
@@ -1495,6 +1657,249 @@ private final class PinChip: UIControl {
                 edit { $0.removeAll { $0.uri == uri } }
             })
             return UIMenu(children: actions)
+        }
+    }
+}
+
+// MARK: - Jump back in
+
+// A cover card for a playlist/album/artist from the on-device listening log.
+private final class RecentCard: UIControl {
+    static let side: CGFloat = 128
+    static var height: CGFloat {
+        side + 8 + ceil(titleFont.lineHeight) + 1 + ceil(kindFont.lineHeight)
+    }
+    private static var titleFont: UIFont { Style.font(.footnote, 13, .semibold, max: 16) }
+    private static var kindFont: UIFont { Style.font(.caption1, 12, .medium, max: 14) }
+
+    let entry: RecentContext
+    private let cover = UIImageView()
+    private let placeholder = UIImageView()
+    private let title = UILabel()
+    private let kind = UILabel()
+    private var loaded: URL?
+
+    init(_ entry: RecentContext) {
+        self.entry = entry
+        super.init(frame: .zero)
+        cover.contentMode = .scaleAspectFill
+        cover.clipsToBounds = true
+        cover.layer.cornerRadius = 14
+        cover.layer.cornerCurve = .continuous
+        cover.layer.borderWidth = 1 / UIScreen.main.scale
+        cover.layer.borderColor = Style.hairline.cgColor
+        cover.backgroundColor = UIColor(white: 1, alpha: 0.07)
+        cover.isUserInteractionEnabled = false
+        addSubview(cover)
+        placeholder.contentMode = .center
+        placeholder.tintColor = Style.tertiary
+        placeholder.image = Style.symbol(Self.symbol(for: entry.kind), 30, .semibold)
+        cover.addSubview(placeholder)
+
+        title.text = entry.title
+        title.textColor = Style.primary
+        kind.text = entry.kind
+        kind.textColor = Style.tertiary
+        [title, kind].forEach {
+            $0.isUserInteractionEnabled = false
+            addSubview($0)
+        }
+        applyFonts()
+
+        isAccessibilityElement = true
+        accessibilityLabel = "\(entry.title), \(entry.kind)"
+        accessibilityHint = "Long-press for options"
+        accessibilityTraits = .button
+        isContextMenuInteractionEnabled = true
+        addTarget(self, action: #selector(tapped), for: .touchUpInside)
+        addTarget(self, action: #selector(down), for: [.touchDown, .touchDragEnter])
+        addTarget(self, action: #selector(up), for: [.touchUpInside, .touchUpOutside, .touchCancel, .touchDragExit])
+        loadCover()
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func applyFonts() {
+        title.font = Self.titleFont
+        kind.font = Self.kindFont
+        setNeedsLayout()
+    }
+
+    private static func symbol(for kind: String) -> String {
+        switch kind {
+        case "Liked Songs": return "heart.fill"
+        case "Album": return "square.stack.fill"
+        case "Artist": return "person.fill"
+        case "Podcast", "Episode", "Your Episodes": return "mic.fill"
+        case "Radio": return "dot.radiowaves.left.and.right"
+        default: return "music.note.list"
+        }
+    }
+
+    private func loadCover() {
+        guard let raw = entry.artwork, let url = URL(string: raw), loaded != url else { return }
+        loaded = url
+        ArtworkCache.load(url) { [weak self] image in
+            guard let self, self.loaded == url else { return }
+            UIView.transition(with: self.cover, duration: 0.3, options: [.transitionCrossDissolve, .allowUserInteraction]) {
+                self.cover.image = image
+                self.placeholder.isHidden = true
+            }
+        }
+    }
+
+    override func sizeThatFits(_ size: CGSize) -> CGSize {
+        CGSize(width: Self.side, height: Self.height)
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        cover.frame = CGRect(x: 0, y: 0, width: Self.side, height: Self.side)
+        placeholder.frame = cover.bounds
+        let titleHeight = ceil(title.font.lineHeight)
+        title.frame = CGRect(x: 2, y: Self.side + 8, width: bounds.width - 4, height: titleHeight)
+        kind.frame = CGRect(x: 2, y: title.frame.maxY + 1, width: bounds.width - 4, height: ceil(kind.font.lineHeight))
+    }
+
+    @objc private func tapped() {
+        Haptics.tap()
+        SpotifyNavigator.open(entry.uri)
+    }
+
+    @objc private func down() {
+        UIView.animate(withDuration: 0.12, delay: 0, options: [.allowUserInteraction, .beginFromCurrentState]) {
+            self.transform = CGAffineTransform(scaleX: 0.95, y: 0.95)
+        }
+    }
+
+    @objc private func up() { Style.spring { self.transform = .identity } }
+
+    override func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
+                                         configurationForMenuAtLocation location: CGPoint) -> UIContextMenuConfiguration? {
+        let entry = entry
+        return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { _ in
+            let pinned = Pins.contains(entry.uri)
+            var actions: [UIMenuElement] = [
+                UIAction(title: "Open", image: UIImage(systemName: "arrow.up.right")) { _ in SpotifyNavigator.open(entry.uri) },
+                UIAction(title: pinned ? "Unpin from Home" : "Pin to Home", image: UIImage(systemName: pinned ? "pin.slash" : "pin")) { _ in
+                    Pins.toggle(uri: entry.uri, title: entry.title)
+                },
+            ]
+            if let link = SpotifyNavigator.webLink(entry.uri) {
+                actions.append(UIAction(title: "Copy Link", image: UIImage(systemName: "link")) { _ in
+                    UIPasteboard.general.url = link
+                    Haptics.success()
+                })
+            }
+            actions.append(UIAction(title: "Remove from Jump back in", image: UIImage(systemName: "xmark.circle"), attributes: .destructive) { _ in
+                ListeningLog.remove(entry.uri)
+            })
+            return UIMenu(title: entry.title, children: actions)
+        }
+    }
+}
+
+// MARK: - Your listening
+
+// Today, this week and the week's top artist, from the on-device listening log.
+private final class StatsCard: UIView {
+    static var preferredHeight: CGFloat {
+        16 + ceil(captionFont.lineHeight) + 4 + ceil(valueFont.lineHeight) + 16
+    }
+    private static var captionFont: UIFont { Style.font(.caption2, 11, .bold, max: 13) }
+    private static var valueFont: UIFont { Style.font(.title3, 20, .bold, rounded: true, monospacedDigits: true, max: 25) }
+
+    private let glass = makeGlass(radius: 22)
+    private let columns = (0..<3).map { _ in (icon: UIImageView(), caption: UILabel(), value: UILabel()) }
+    private let dividers = (0..<2).map { _ in UIView() }
+    private let empty = UILabel()
+    private var shown: ListeningSummary?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        addSubview(glass)
+        let specs: [(String, String, UIColor)] = [
+            ("clock.fill", "TODAY", Style.green),
+            ("calendar", "THIS WEEK", UIColor(red: 0.35, green: 0.62, blue: 1, alpha: 1)),
+            ("star.fill", "TOP ARTIST", UIColor(red: 1, green: 0.72, blue: 0.25, alpha: 1)),
+        ]
+        for (column, spec) in zip(columns, specs) {
+            column.icon.image = Style.symbol(spec.0, 10)
+            column.icon.tintColor = spec.2
+            column.icon.contentMode = .center
+            column.caption.text = spec.1
+            column.caption.textColor = Style.secondary
+            column.value.textColor = Style.primary
+            column.value.adjustsFontSizeToFitWidth = true
+            column.value.minimumScaleFactor = 0.6
+            [column.icon, column.caption, column.value].forEach(addSubview)
+        }
+        dividers.forEach {
+            $0.backgroundColor = Style.hairline
+            addSubview($0)
+        }
+        empty.text = "Play something and your listening time shows up here."
+        empty.textColor = Style.secondary
+        empty.numberOfLines = 2
+        empty.textAlignment = .center
+        empty.adjustsFontSizeToFitWidth = true
+        empty.minimumScaleFactor = 0.8
+        addSubview(empty)
+        applyFonts()
+        isAccessibilityElement = true
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func applyFonts() {
+        columns.forEach {
+            $0.caption.font = Self.captionFont
+            $0.value.font = Self.valueFont
+        }
+        empty.font = Style.font(.subheadline, 14, .medium, max: 18)
+        setNeedsLayout()
+    }
+
+    private static func duration(_ seconds: Double) -> String {
+        let minutes = Int(seconds / 60)
+        return minutes >= 60 ? "\(minutes / 60)h \(minutes % 60)m" : "\(minutes)m"
+    }
+
+    func update(_ summary: ListeningSummary) {
+        guard summary != shown else { return }
+        shown = summary
+        let hasData = summary.week >= 60
+        empty.isHidden = hasData
+        columns.forEach { [$0.icon, $0.caption, $0.value].forEach { $0.isHidden = !hasData } }
+        dividers.forEach { $0.isHidden = !hasData }
+        columns[0].value.text = Self.duration(summary.today)
+        columns[1].value.text = Self.duration(summary.week)
+        columns[2].value.text = summary.topArtist ?? "–"
+        accessibilityLabel = hasData
+            ? "Today \(Self.duration(summary.today)), this week \(Self.duration(summary.week)), top artist \(summary.topArtist ?? "none")"
+            : empty.text
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        glass.frame = bounds
+        empty.frame = bounds.insetBy(dx: 20, dy: 10)
+        let inset: CGFloat = 16
+        // The artist column gets more room: names run longer than durations.
+        let shares: [CGFloat] = [0.28, 0.3, 0.42]
+        let usable = bounds.width - inset * 2
+        var x = inset
+        let captionHeight = ceil(Self.captionFont.lineHeight)
+        for (index, column) in columns.enumerated() {
+            let width = usable * shares[index]
+            let pad: CGFloat = index == 0 ? 0 : 12
+            column.icon.frame = CGRect(x: x + pad, y: 16, width: 12, height: captionHeight)
+            column.caption.frame = CGRect(x: x + pad + 16, y: 16, width: width - pad - 16, height: captionHeight)
+            column.value.frame = CGRect(x: x + pad, y: 16 + captionHeight + 4, width: width - pad - 4, height: ceil(Self.valueFont.lineHeight))
+            if index < dividers.count {
+                dividers[index].frame = CGRect(x: x + width, y: 14, width: 1 / UIScreen.main.scale, height: bounds.height - 28)
+            }
+            x += width
         }
     }
 }

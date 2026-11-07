@@ -98,6 +98,7 @@ func activateLiquidGlass() {
     if options.tabBar {
         tabBar = activate(GlassTabBarGroup(), GlassTabBarViewHook.targetName, GlassTabBarContainerHook.targetName)
         add("tab bar", tabBar)
+        if tabBar { activateGlassTabBarExtras() }
     }
     if options.nowPlayingBar {
         nowPlaying = activate(GlassNowPlayingBarGroup(), GlassNowPlayingBarContainerHook.targetName, GlassNowPlayingBarHook.targetName)

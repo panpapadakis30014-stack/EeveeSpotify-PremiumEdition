@@ -16,8 +16,12 @@ import UIKit
 // Spotify's Swift classes change return types between builds (seconds as Double vs
 // milliseconds as Int64), so every call checks the method's encoded return type first.
 enum ObjCCall {
+    // The return-type code of a no-argument instance method, or nil if the object has no such
+    // method (or it takes arguments): every call below is skipped rather than guessed at.
     static func returnType(_ object: NSObject, _ selector: Selector) -> Character? {
-        guard let method = class_getInstanceMethod(type(of: object), selector) else { return nil }
+        guard object.responds(to: selector),
+              let method = class_getInstanceMethod(type(of: object), selector),
+              method_getNumberOfArguments(method) == 2 else { return nil }
         let raw = method_copyReturnType(method)
         defer { free(raw) }
         // Skip type qualifiers (r = const, etc.).
@@ -27,14 +31,14 @@ enum ObjCCall {
     static func object(_ object: NSObject?, _ name: String) -> NSObject? {
         guard let object else { return nil }
         let selector = NSSelectorFromString(name)
-        guard object.responds(to: selector), returnType(object, selector) == "@" else { return nil }
+        guard returnType(object, selector) == "@" else { return nil }
         return object.perform(selector)?.takeUnretainedValue() as? NSObject
     }
 
     static func number(_ object: NSObject?, _ name: String) -> Double? {
         guard let object else { return nil }
         let selector = NSSelectorFromString(name)
-        guard object.responds(to: selector), let kind = returnType(object, selector) else { return nil }
+        guard let kind = returnType(object, selector) else { return nil }
         let imp = object.method(for: selector)
         switch kind {
         case "d":
@@ -73,9 +77,7 @@ enum ObjCCall {
     static func call(_ object: NSObject?, _ name: String) -> Bool {
         guard let object else { return false }
         let selector = NSSelectorFromString(name)
-        guard object.responds(to: selector), returnType(object, selector) == "v",
-              let method = class_getInstanceMethod(type(of: object), selector),
-              method_getNumberOfArguments(method) == 2 else { return false }
+        guard returnType(object, selector) == "v" else { return false }
         unsafeBitCast(object.method(for: selector), to: (@convention(c) (NSObject, Selector) -> Void).self)(object, selector)
         return true
     }
@@ -93,7 +95,7 @@ enum SpotifyNavigator {
 
     // Runs once Spotify's main UI (tab bar, Home) is up, or right away if it already is.
     static func whenMainUILoaded(_ action: @escaping () -> Void) {
-        if mainUILoaded { action() } else { launchActions.append(action) }
+        if mainUILoaded { DispatchQueue.main.async(execute: action) } else { launchActions.append(action) }
     }
 
     fileprivate static func mainUIDidLoad() {
@@ -101,7 +103,8 @@ enum SpotifyNavigator {
         mainUILoaded = true
         let actions = launchActions
         launchActions = []
-        actions.forEach { $0() }
+        // Spotify may report this off the main thread; everything queued here touches UI.
+        DispatchQueue.main.async { actions.forEach { $0() } }
     }
 
     // spotify:track:ID → https://open.spotify.com/track/ID (what the share sheet expects).
@@ -114,6 +117,10 @@ enum SpotifyNavigator {
     }
 
     static func open(_ uri: String) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { open(uri) }
+            return
+        }
         guard let url = URL(string: uri) else { return }
         if let dispatcher, dispatcher.responds(to: navigate) {
             typealias Navigate = @convention(c) (NSObject, Selector, NSURL, Int64, AnyObject?) -> Void

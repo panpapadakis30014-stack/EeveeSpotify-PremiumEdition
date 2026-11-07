@@ -23,6 +23,33 @@ enum StartupPage: String, Codable, CaseIterable {
     }
 }
 
+// The sections of Eevee Home, in the order the user chose.
+enum HomeSection: String, Codable, CaseIterable, Hashable {
+    case greeting, nowPlaying, shortcuts, recents, pinned, stats
+
+    var title: String {
+        switch self {
+        case .greeting: return "Greeting"
+        case .nowPlaying: return "Now playing card"
+        case .shortcuts: return "Quick tiles"
+        case .recents: return "Jump back in"
+        case .pinned: return "Pinned"
+        case .stats: return "Your listening"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .greeting: return "sun.max.fill"
+        case .nowPlaying: return "play.rectangle.fill"
+        case .shortcuts: return "square.grid.3x2.fill"
+        case .recents: return "clock.arrow.circlepath"
+        case .pinned: return "pin.fill"
+        case .stats: return "chart.bar.fill"
+        }
+    }
+}
+
 // Something pinned to the top of the Eevee Home header (a playlist, album, artist…).
 struct PinnedItem: Codable, Equatable, Hashable {
     var uri: String
@@ -38,6 +65,10 @@ struct ExtrasOptions: Codable, Equatable {
     var homeHero = true
     var homeTiles = true
     var pinned: [PinnedItem] = []
+    var homeRecents = true
+    var homePinned = true
+    var homeStats = true
+    var homeOrder = HomeSection.allCases
     var homeArtworkTint = true
     var homeHaptics = true
     var heroActions = true
@@ -54,6 +85,28 @@ struct ExtrasOptions: Codable, Equatable {
     var resumeNeedsHeadphones = true
     var awakeWhileCharging = false
     var offlineOpensDownloads = false
+    // Jump back in + listening stats are built from this on-device log.
+    var recordListening = true
+    var lyricsAwake = true
+    var tabHaptics = true
+
+    // Every section once, in the saved order, with any new section appended.
+    var orderedSections: [HomeSection] {
+        var seen = Set<HomeSection>()
+        let saved = homeOrder.filter { seen.insert($0).inserted }
+        return saved + HomeSection.allCases.filter { !seen.contains($0) }
+    }
+
+    func shows(_ section: HomeSection) -> Bool {
+        switch section {
+        case .greeting: return homeGreeting
+        case .nowPlaying: return homeHero
+        case .shortcuts: return homeTiles
+        case .recents: return homeRecents && recordListening
+        case .pinned: return homePinned
+        case .stats: return homeStats && recordListening
+        }
+    }
 
     static let fadeChoices = [15, 30, 60, 120, 300]
     // What this launch is running with (settings changes apply after a restart).
@@ -81,6 +134,15 @@ struct ExtrasOptions: Codable, Equatable {
         resumeNeedsHeadphones = try c.decodeIfPresent(Bool.self, forKey: .resumeNeedsHeadphones) ?? d.resumeNeedsHeadphones
         awakeWhileCharging = try c.decodeIfPresent(Bool.self, forKey: .awakeWhileCharging) ?? d.awakeWhileCharging
         offlineOpensDownloads = try c.decodeIfPresent(Bool.self, forKey: .offlineOpensDownloads) ?? d.offlineOpensDownloads
+        homeRecents = try c.decodeIfPresent(Bool.self, forKey: .homeRecents) ?? d.homeRecents
+        homePinned = try c.decodeIfPresent(Bool.self, forKey: .homePinned) ?? d.homePinned
+        homeStats = try c.decodeIfPresent(Bool.self, forKey: .homeStats) ?? d.homeStats
+        // Unknown section names from a newer build are dropped instead of failing the whole decode.
+        let rawOrder = try c.decodeIfPresent([String].self, forKey: .homeOrder)
+        homeOrder = rawOrder.map { $0.compactMap(HomeSection.init(rawValue:)) } ?? d.homeOrder
+        recordListening = try c.decodeIfPresent(Bool.self, forKey: .recordListening) ?? d.recordListening
+        lyricsAwake = try c.decodeIfPresent(Bool.self, forKey: .lyricsAwake) ?? d.lyricsAwake
+        tabHaptics = try c.decodeIfPresent(Bool.self, forKey: .tabHaptics) ?? d.tabHaptics
     }
 }
 
