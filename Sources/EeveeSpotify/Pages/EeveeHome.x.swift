@@ -648,7 +648,7 @@ private final class HomeTile: UIControl {
 
 // MARK: - Pinned chips
 
-private final class PinChip: UIControl, UIContextMenuInteractionDelegate {
+private final class PinChip: UIControl {
     private let item: PinnedItem
     private let glass = makeGlass(radius: 20)
     private let icon = UIImageView()
@@ -670,7 +670,7 @@ private final class PinChip: UIControl, UIContextMenuInteractionDelegate {
         isAccessibilityElement = true
         accessibilityTraits = .button
         addTarget(self, action: #selector(tapped), for: .touchUpInside)
-        addInteraction(UIContextMenuInteraction(delegate: self))
+        isContextMenuInteractionEnabled = true
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -699,7 +699,7 @@ private final class PinChip: UIControl, UIContextMenuInteractionDelegate {
         SpotifyNavigator.open(item.uri)
     }
 
-    func contextMenuInteraction(_ interaction: UIContextMenuInteraction, configurationForMenuAtLocation location: CGPoint) -> UIContextMenuConfiguration? {
+    override func contextMenuInteraction(_ interaction: UIContextMenuInteraction, configurationForMenuAtLocation location: CGPoint) -> UIContextMenuConfiguration? {
         let uri = item.uri
         return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { _ in
             UIMenu(children: [
