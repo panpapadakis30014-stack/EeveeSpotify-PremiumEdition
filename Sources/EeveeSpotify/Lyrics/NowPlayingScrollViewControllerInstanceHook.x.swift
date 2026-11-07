@@ -91,6 +91,7 @@ class NowPlayingPlatformSwiftServiceImplementationHook: ClassHook<NSObject> {
         statefulPlayer = orig.provideStatefulPlayerWithFeatureIdentifier(identifier)
         if !didDumpStatefulPlayer {
             didDumpStatefulPlayer = true
+            PremiumDiag.note("stateful player captured via \(identifier)")
             karaokeDumpClassMethods("statefulPlayer", of: statefulPlayer as AnyObject)
         }
         return statefulPlayer!

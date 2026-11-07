@@ -3,9 +3,10 @@ import UIKit
 
 struct HomeSectionsGroup: HookGroup {}
 struct HomePillsGroup: HookGroup {}
+struct HomeSpokenPillsGroup: HookGroup {}
 
 enum HomePart: String, CaseIterable, Codable {
-    case shortcuts, promos, previews, dj, pills
+    case shortcuts, promos, previews, dj, pills, podcasts
 
     var marker: String? {
         switch self {
@@ -13,7 +14,7 @@ enum HomePart: String, CaseIterable, Codable {
         case .promos: return "Discovery_PromoElement"
         case .previews: return "Discovery_PreviewElement"
         case .dj: return "Discovery_DJElement"
-        case .pills: return nil
+        case .pills, .podcasts: return nil
         }
     }
 }
@@ -24,7 +25,22 @@ extension UserDefaults {
 }
 
 enum HomeDeclutter {
-    static let hidden = Set(UserDefaults.homeHidden)
+    // Music-only mode (Premium Extras) adds podcasts on top of the Home page's own choices.
+    static let hidden = Set(UserDefaults.homeHidden).union(UserDefaults.extrasOptions.hidePodcasts ? [.podcasts] : [])
+    private static var diagnosed = 0
+
+    // Shelf titles and card subtitles that mark spoken-word content (English + Greek).
+    private static let spokenWords = ["podcast", "episode", "audiobook", "audiobooks", "episodes",
+                                      "επεισόδιο", "επεισόδια", "ηχητικό βιβλίο", "ηχητικά βιβλία"]
+
+    private static func isSpokenWord(_ texts: [String]) -> Bool {
+        guard !texts.isEmpty else { return false }
+        let lowered = texts.map { $0.lowercased() }
+        let hits = lowered.filter { text in spokenWords.contains { text.contains($0) } }.count
+        // A shelf title like "Episodes for you", or most cards labelled as episodes/podcasts/audiobooks.
+        if let title = lowered.first, spokenWords.contains(where: { title.contains($0) }) { return true }
+        return hits >= 2 && hits * 3 >= lowered.count
+    }
     static let meter = PerfMeter("Home][Declutter")
     private static var verdictKey: UInt8 = 0
     private static var logged = Set<HomePart>()
@@ -55,6 +71,7 @@ enum HomeDeclutter {
             ancestor = view.superview
         }
         var names = [String]()
+        var texts = [String]()
         var queue: [UIView] = [cell]
         var index = 0
         while index < queue.count {
@@ -62,11 +79,18 @@ enum HomeDeclutter {
             index += 1
             if view !== cell, view is UICollectionView { view.layoutIfNeeded() }
             names.append(NSStringFromClass(type(of: view)))
+            if let label = view as? UILabel, let text = label.text, !text.isEmpty { texts.append(text) }
+            else if let text = view.accessibilityLabel, !text.isEmpty, view.isAccessibilityElement { texts.append(text) }
             queue += view.subviews
         }
         let all = names.joined()
         guard all.contains("Home_EvoPageImpl") else { return (nil, true) }
-        let part = HomePart.allCases.first { hidden.contains($0) && $0.marker.map(all.contains) == true }
+        var part = HomePart.allCases.first { hidden.contains($0) && $0.marker.map(all.contains) == true }
+        if part == nil, hidden.contains(.podcasts), isSpokenWord(texts) { part = .podcasts }
+        if hidden.contains(.podcasts), diagnosed < 14, queue.count > 40 {
+            diagnosed += 1
+            PremiumDiag.note("home shelf \(part == .podcasts ? "HIDDEN" : "kept"): " + texts.prefix(4).joined(separator: " | "))
+        }
         if let part, logged.insert(part).inserted { eeveeLog("[EeveeSpotify][Home] Collapsed %@", part.rawValue) }
         // Sections fill in after their first pass, so a visible verdict is only final once content has settled.
         return (part, part != nil || queue.count > 40)
@@ -96,11 +120,43 @@ class HomePillsHook: ClassHook<UIView> {
     }
 }
 
+// Music-only mode: drop just the Podcasts / Audiobooks filter pills, keep the rest of the bar.
+class HomeSpokenPillHook: ClassHook<UIView> {
+    typealias Group = HomeSpokenPillsGroup
+    static let targetName = "_TtC14Home_PillUIKit8PillView"
+
+    func didMoveToWindow() {
+        orig.didMoveToWindow()
+        let pill = target
+        DispatchQueue.main.async { HomeDeclutter.hideIfSpokenPill(pill) }
+    }
+}
+
+extension HomeDeclutter {
+    private static var pillsLogged = 0
+
+    static func hideIfSpokenPill(_ pill: UIView) {
+        guard pill.window != nil, !pill.isHidden else { return }
+        let text = (pill.eeveeFirst(UILabel.self)?.text ?? pill.accessibilityLabel ?? "").lowercased()
+        let spoken = ["podcast", "audiobook", "ηχητικά", "ηχητικό"].contains { text.contains($0) }
+        if pillsLogged < 6 {
+            pillsLogged += 1
+            PremiumDiag.note("home pill '\(text)' in \(pill.superview.map { NSStringFromClass(type(of: $0)) } ?? "nil") spoken=\(spoken)")
+        }
+        guard spoken, pill.superview is UIStackView else { return }
+        pill.isHidden = true
+    }
+}
+
 func activateHomeDeclutter() {
     let hidden = HomeDeclutter.hidden
     guard !hidden.isEmpty else { return }
     let start = CFAbsoluteTimeGetCurrent()
     var active = [String]()
+    if hidden.contains(.podcasts), !hidden.contains(.pills), NSClassFromString(HomeSpokenPillHook.targetName) != nil {
+        HomeSpokenPillsGroup().activate()
+        active.append("spoken pills")
+    }
     if hidden.contains(.pills), NSClassFromString(HomePillsHook.targetName) != nil {
         HomePillsGroup().activate()
         active.append("pills")
