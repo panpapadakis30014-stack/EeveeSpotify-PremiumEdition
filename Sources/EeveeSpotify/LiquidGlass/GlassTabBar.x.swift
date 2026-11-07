@@ -219,12 +219,59 @@ enum GlassTabBar {
     // needs for an icon plus a label. Inheriting that height squashes the items, so the glass bar gets
     // a floor of its own and is centred on Spotify's strip to keep the row where it was.
     private static let minimumBarHeight: CGFloat = 50
+    // UIKit's own compact tab bar height above the home indicator.
+    private static let phoneBarHeight: CGFloat = 49
+    private static var lastStockSize: CGSize?
+    private static var shapeNotes = 0
 
-    private static func barFrame(in stock: UIView) -> CGRect {
+    // On iPhone the glass bar no longer copies Spotify's frame. Offline, Spotify's container squeezes
+    // its tab bar view (an offline strip takes part of the bottom area), and a UITabBar given that
+    // shorter frame lays the floating platter out squashed. The bar now always gets UIKit's standard
+    // height (49 + the home-indicator inset), pinned to the bottom of the screen, whatever Spotify does.
+    static func barFrame(in stock: UIView) -> CGRect {
         let bounds = stock.bounds
-        guard bounds.height > 0, bounds.height < minimumBarHeight else { return bounds }
-        return CGRect(x: bounds.minX, y: bounds.midY - minimumBarHeight / 2,
-                      width: bounds.width, height: minimumBarHeight)
+        guard bounds.height > 0 else { return bounds }
+        guard UIDevice.current.userInterfaceIdiom == .phone, let window = stock.window else {
+            guard bounds.height < minimumBarHeight else { return bounds }
+            return CGRect(x: bounds.minX, y: bounds.midY - minimumBarHeight / 2,
+                          width: bounds.width, height: minimumBarHeight)
+        }
+        let height = phoneBarHeight + window.safeAreaInsets.bottom
+        let screenBottom = stock.convert(CGPoint(x: 0, y: window.bounds.maxY), from: window).y
+        // Spotify's bar normally ends at the screen's bottom edge; follow it there unless it has been
+        // moved far away (a sheet or a transition), where the old behaviour is the safer choice.
+        let bottom = abs(screenBottom - bounds.maxY) < 160 ? screenBottom : bounds.maxY
+        let frame = CGRect(x: bounds.minX, y: bottom - height, width: bounds.width, height: height)
+        noteShape(stock, frame: frame, window: window)
+        return frame
+    }
+
+    // Records what Spotify's bar looks like whenever its size changes (online vs offline), for read_diag.
+    private static func noteShape(_ stock: UIView, frame: CGRect, window: UIWindow) {
+        let size = stock.bounds.size
+        guard size != lastStockSize, shapeNotes < 12 else { return }
+        lastStockSize = size
+        shapeNotes += 1
+        let inWindow = stock.convert(stock.bounds, to: window)
+        let siblings = (stock.superview?.subviews ?? []).filter { $0 !== stock && !$0.isHidden && $0.alpha > 0.01 }
+            .suffix(6).map { "\(NSStringFromClass(type(of: $0)).components(separatedBy: ".").last ?? "?")@\(Int($0.frame.minY))h\(Int($0.frame.height))" }
+        let inner = stock.subviews.filter { !($0 is GlassSystemTabBar) }
+            .map { "\(NSStringFromClass(type(of: $0)).components(separatedBy: ".").last ?? "?")@\(Int($0.frame.minY))h\(Int($0.frame.height))" }
+        PremiumDiag.note("tabbar stock \(Int(inWindow.minY))+\(Int(size.height)) safe \(Int(window.safeAreaInsets.bottom)) glass y\(Int(frame.minY)) h\(Int(frame.height)) inner [\(inner.joined(separator: " "))] siblings [\(siblings.joined(separator: " "))]")
+    }
+
+    // Spotify can move its bar without resizing it (no layoutSubviews), so the container re-fits ours too.
+    static func refit() {
+        guard let stock, let bar = objc_getAssociatedObject(stock, &barKey) as? GlassSystemTabBar else { return }
+        let frame = barFrame(in: stock)
+        if bar.frame != frame { bar.frame = frame }
+    }
+
+    // The glass bar can reach past Spotify's (shorter) view; touches there still belong to it.
+    static func ownsPoint(_ point: CGPoint, in stock: UIView) -> Bool {
+        guard let bar = objc_getAssociatedObject(stock, &barKey) as? GlassSystemTabBar,
+              !bar.isHidden, bar.alpha > 0.01 else { return false }
+        return bar.frame.contains(point)
     }
 
     private static func systemBar(on stock: UIView) -> GlassSystemTabBar {
@@ -305,11 +352,24 @@ class GlassTabBarViewHook: ClassHook<UIView> {
         activateGlassCustomTabs()
         GlassTabBar.meter.measure { GlassTabBar.sync(target) }
     }
+
+    @objc(pointInside:withEvent:)
+    func pointInside(_ point: CGPoint, withEvent event: UIEvent?) -> Bool {
+        if orig.pointInside(point, withEvent: event) { return true }
+        guard #available(iOS 26.0, *) else { return false }
+        return GlassTabBar.ownsPoint(point, in: target)
+    }
 }
 
 class GlassTabBarContainerHook: ClassHook<UIViewController> {
     typealias Group = GlassTabBarGroup
     static let targetName = "_TtC23NavigationUI_TabBarImpl19TabBarContainerImpl"
+
+    func viewDidLayoutSubviews() {
+        orig.viewDidLayoutSubviews()
+        guard #available(iOS 26.0, *) else { return }
+        GlassTabBar.refit()
+    }
 
     func setSelectedViewController(_ controller: UIViewController) {
         orig.setSelectedViewController(controller)

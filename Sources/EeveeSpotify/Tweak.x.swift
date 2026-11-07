@@ -178,6 +178,7 @@ struct EeveeSpotify: Tweak {
         activateSpotifyNavigator()
         activateEeveeHome()
         SleepFade.activate()
+        QualityOfLife.activate()
 
         if EeveeSpotify.hookTarget == .v91 {
             if UserDefaults.lyricsSource.isReplacingLyrics {

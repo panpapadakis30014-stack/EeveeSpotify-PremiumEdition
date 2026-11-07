@@ -1,6 +1,7 @@
 import EeveeSpotifyC
 import Foundation
 import MediaPlayer
+import Network
 import ObjectiveC.runtime
 import Orion
 import UIKit
@@ -87,6 +88,30 @@ struct SpotifyNavigatorGroup: HookGroup { }
 enum SpotifyNavigator {
     fileprivate static weak var dispatcher: NSObject?
     private static let navigate = NSSelectorFromString("navigateToURI:options:interactionID:")
+    private static var launchActions: [() -> Void] = []
+    private(set) static var mainUILoaded = false
+
+    // Runs once Spotify's main UI (tab bar, Home) is up, or right away if it already is.
+    static func whenMainUILoaded(_ action: @escaping () -> Void) {
+        if mainUILoaded { action() } else { launchActions.append(action) }
+    }
+
+    fileprivate static func mainUIDidLoad() {
+        guard !mainUILoaded else { return }
+        mainUILoaded = true
+        let actions = launchActions
+        launchActions = []
+        actions.forEach { $0() }
+    }
+
+    // spotify:track:ID → https://open.spotify.com/track/ID (what the share sheet expects).
+    static func webLink(_ uri: String) -> URL? {
+        let parts = uri.split(separator: ":").map(String.init)
+        guard parts.count >= 3, parts[0] == "spotify" else { return nil }
+        let kinds = ["track", "album", "artist", "playlist", "show", "episode", "audiobook"]
+        guard let index = parts.firstIndex(where: kinds.contains), index + 1 < parts.count else { return nil }
+        return URL(string: "https://open.spotify.com/\(parts[index])/\(parts[index + 1])")
+    }
 
     static func open(_ uri: String) {
         guard let url = URL(string: uri) else { return }
@@ -107,6 +132,7 @@ class SpotifyNavigatorHook: ClassHook<NSObject> {
     func setMainUILoaded(_ loaded: Bool) {
         orig.setMainUILoaded(loaded)
         SpotifyNavigator.dispatcher = target
+        if loaded { SpotifyNavigator.mainUIDidLoad() }
     }
 }
 
@@ -129,6 +155,36 @@ struct NowPlayingInfo: Equatable {
     var contextTitle: String?
     var isPaused: Bool
     var isSpokenWord: Bool
+    var trackURI: String?
+    var artistURI: String?
+    var albumURI: String?
+    var albumTitle: String?
+}
+
+// Whether the phone has a usable network path. Spotify's own offline state isn't exposed,
+// so Eevee Home treats "no network" as offline.
+enum Connectivity {
+    private(set) static var isOffline = false
+    private static let monitor: NWPathMonitor = {
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { path in
+            let offline = path.status != .satisfied
+            DispatchQueue.main.async {
+                guard offline != isOffline else { return }
+                isOffline = offline
+                PremiumDiag.note("connectivity: \(offline ? "offline" : "online")")
+                NotificationCenter.default.post(name: .eeveeConnectivityChanged, object: nil)
+            }
+        }
+        monitor.start(queue: DispatchQueue(label: "eevee.connectivity"))
+        return monitor
+    }()
+
+    static func start() { _ = monitor }
+}
+
+extension Notification.Name {
+    static let eeveeConnectivityChanged = Notification.Name("EeveeConnectivityChanged")
 }
 
 enum SleepTimerState: Equatable {
@@ -139,6 +195,12 @@ enum SleepTimerState: Equatable {
 
 enum SpotifyPlayback {
     private static var loggedState = false
+    private static var loggedMeta = false
+
+    // Tracks waiting in the queue after the current one, if Spotify tells us.
+    static var upNextCount: Int? {
+        ObjCCall.number(player, "numberOfNextTracks").map { Int($0) }
+    }
 
     static var player: NSObject? { statefulPlayer.map { $0 as AnyObject } as? NSObject }
     static var state: NSObject? { ObjCCall.object(player, "playerState") }
@@ -218,13 +280,25 @@ enum SpotifyPlayback {
         let metadata = ObjCCall.object(state, "contextMetadata") as? [String: Any]
         let contextTitle = (metadata?["context_description"] as? String) ?? (metadata?["context_title"] as? String)
         let spoken = ObjCCall.number(track, "isPodcast") == 1 || ObjCCall.number(track, "isAudiobook") == 1
+        let meta = ObjCCall.object(track, "metadata") as? [String: Any]
+        func metaURI(_ key: String) -> String? {
+            guard let value = meta?[key] as? String, value.hasPrefix("spotify:") else { return nil }
+            return value
+        }
+        let trackURI = ObjCCall.string(track, "URI").flatMap { $0.hasPrefix("spotify:") ? $0 : nil }
 
         if !loggedState {
             loggedState = true
             PremiumDiag.note("playback: player=\(player.map { NSStringFromClass(type(of: $0)) } ?? "nil") state=\(state.map { NSStringFromClass(type(of: $0)) } ?? "nil") track=\(track.map { NSStringFromClass(type(of: $0)) } ?? "nil") context=\(context ?? "nil") art=\(artwork?.absoluteString ?? "nil")")
         }
+        if !loggedMeta, let meta {
+            loggedMeta = true
+            PremiumDiag.note("track meta keys: " + meta.keys.sorted().prefix(40).joined(separator: " ") + " uri=\(trackURI ?? "nil")")
+        }
         return NowPlayingInfo(title: title, artist: artist, artworkURL: artwork, contextURI: context,
-                              contextTitle: contextTitle, isPaused: isPaused, isSpokenWord: spoken)
+                              contextTitle: contextTitle, isPaused: isPaused, isSpokenWord: spoken,
+                              trackURI: trackURI, artistURI: metaURI("artist_uri"), albumURI: metaURI("album_uri"),
+                              albumTitle: meta?["album_title"] as? String)
     }
 
     // spotify:image:<id> → https://i.scdn.co/image/<id>

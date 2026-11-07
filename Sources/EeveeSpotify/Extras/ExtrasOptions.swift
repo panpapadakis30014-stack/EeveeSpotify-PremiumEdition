@@ -38,6 +38,9 @@ struct ExtrasOptions: Codable, Equatable {
     var homeHero = true
     var homeTiles = true
     var pinned: [PinnedItem] = []
+    var homeArtworkTint = true
+    var homeHaptics = true
+    var heroActions = true
 
     // Sleep timer: fade out before Spotify's own timer pauses playback.
     var sleepFade = true
@@ -45,6 +48,12 @@ struct ExtrasOptions: Codable, Equatable {
 
     // Music-only mode for Home.
     var hidePodcasts = false
+
+    // Quality of life.
+    var resumeOnLaunch = false
+    var resumeNeedsHeadphones = true
+    var awakeWhileCharging = false
+    var offlineOpensDownloads = false
 
     static let fadeChoices = [15, 30, 60, 120, 300]
     // What this launch is running with (settings changes apply after a restart).
@@ -65,6 +74,13 @@ struct ExtrasOptions: Codable, Equatable {
         sleepFade = try c.decodeIfPresent(Bool.self, forKey: .sleepFade) ?? d.sleepFade
         sleepFadeSeconds = try c.decodeIfPresent(Int.self, forKey: .sleepFadeSeconds) ?? d.sleepFadeSeconds
         hidePodcasts = try c.decodeIfPresent(Bool.self, forKey: .hidePodcasts) ?? d.hidePodcasts
+        homeArtworkTint = try c.decodeIfPresent(Bool.self, forKey: .homeArtworkTint) ?? d.homeArtworkTint
+        homeHaptics = try c.decodeIfPresent(Bool.self, forKey: .homeHaptics) ?? d.homeHaptics
+        heroActions = try c.decodeIfPresent(Bool.self, forKey: .heroActions) ?? d.heroActions
+        resumeOnLaunch = try c.decodeIfPresent(Bool.self, forKey: .resumeOnLaunch) ?? d.resumeOnLaunch
+        resumeNeedsHeadphones = try c.decodeIfPresent(Bool.self, forKey: .resumeNeedsHeadphones) ?? d.resumeNeedsHeadphones
+        awakeWhileCharging = try c.decodeIfPresent(Bool.self, forKey: .awakeWhileCharging) ?? d.awakeWhileCharging
+        offlineOpensDownloads = try c.decodeIfPresent(Bool.self, forKey: .offlineOpensDownloads) ?? d.offlineOpensDownloads
     }
 }
 

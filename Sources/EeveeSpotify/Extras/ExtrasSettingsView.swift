@@ -10,19 +10,26 @@ struct ExtrasSettingsView: View {
             || options.eeveeHome != launched.eeveeHome
             || options.sleepFade != launched.sleepFade
             || options.hidePodcasts != launched.hidePodcasts
+            || options.resumeOnLaunch != launched.resumeOnLaunch
+            || options.offlineOpensDownloads != launched.offlineOpensDownloads
     }
 
     var body: some View {
         List {
             Section(
                 header: Text("Eevee Home"),
-                footer: Text("A redesigned top of Home: greeting, a now-playing card with controls, quick tiles for Liked Songs, Downloads, Recents, Queue, Sleep timer and Equalizer, and your pinned playlists. Tap the pin on the now-playing card to pin what's playing; long-press a pin to remove it.")
+                footer: Text("A redesigned top of Home: greeting, a now-playing card tinted from the artwork with progress and controls, quick tiles for Liked Songs, Downloads, Recents, Queue, Sleep timer and Equalizer, and your pinned playlists. Tap the pin on the card to pin what's playing; long-press a pin to move or remove it. Offline, Downloads moves to the front.")
             ) {
                 SettingsToggle(title: "Eevee Home", icon: "sparkles", color: .green, isOn: $options.eeveeHome)
                 if options.eeveeHome {
                     SettingsToggle(title: "Greeting", icon: "sun.max.fill", color: .orange, isOn: $options.homeGreeting)
                     SettingsToggle(title: "Now playing card", icon: "play.rectangle.fill", color: .pink, isOn: $options.homeHero)
                     SettingsToggle(title: "Quick tiles", icon: "square.grid.3x2.fill", color: .blue, isOn: $options.homeTiles)
+                    if options.homeHero {
+                        SettingsToggle(title: "Tint from artwork", icon: "paintpalette.fill", color: .purple, isOn: $options.homeArtworkTint)
+                        SettingsToggle(title: "Long-press quick actions", icon: "hand.tap.fill", color: Color(red: 0.2, green: 0.7, blue: 0.75), isOn: $options.heroActions)
+                    }
+                    SettingsToggle(title: "Haptics", icon: "waveform", color: .gray, isOn: $options.homeHaptics)
                 }
             }
 
@@ -55,6 +62,18 @@ struct ExtrasSettingsView: View {
                 footer: Text("Hides podcast and audiobook shelves and the Podcasts / Audiobooks filter pills on Home.")
             ) {
                 SettingsToggle(title: "Hide podcasts & audiobooks", icon: "mic.slash.fill", color: .red, isOn: $options.hidePodcasts)
+            }
+
+            Section(
+                header: Text("Quality of life"),
+                footer: Text("Resume picks your last track back up when Spotify opens; with the headphone check on, it only does so through headphones, Bluetooth, AirPlay or a car, never the phone speaker. Keep screen on stops the phone sleeping while music plays and it's charging, handy on a nightstand or in the car. Long-press the now-playing card on Home to share or copy the song link, or jump to the artist, album or queue.")
+            ) {
+                SettingsToggle(title: "Resume on launch", icon: "play.circle.fill", color: .green, isOn: $options.resumeOnLaunch)
+                if options.resumeOnLaunch {
+                    SettingsToggle(title: "Only with headphones or car", icon: "headphones", color: .blue, isOn: $options.resumeNeedsHeadphones)
+                }
+                SettingsToggle(title: "Keep screen on while charging", icon: "bolt.fill", color: .yellow, isOn: $options.awakeWhileCharging)
+                SettingsToggle(title: "Open Downloads when offline", icon: "wifi.slash", color: .orange, isOn: $options.offlineOpensDownloads)
             }
 
             Section(footer: Text("The Queue tile on Home opens Spotify's queue, where you can reorder, remove and clear upcoming tracks.")) {
