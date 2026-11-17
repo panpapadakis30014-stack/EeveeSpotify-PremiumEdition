@@ -10,6 +10,16 @@ final class GlassSystemTabBar: UITabBar, UITabBarDelegate {
     weak var stock: UIView?
     var sources: [GlassTabSource] = []
 
+    // Offline Spotify places its 49-point strip above the offline banner. Inheriting
+    // the container's home-indicator inset leaves only 15 points for the tab items.
+    override var safeAreaInsets: UIEdgeInsets {
+        var insets = super.safeAreaInsets
+        if let stock, UIDevice.current.userInterfaceIdiom == .phone {
+            insets.bottom = GlassTabBar.bottomInset(in: stock)
+        }
+        return insets
+    }
+
     func tabBar(_ tabBar: UITabBar, didSelect item: UITabBarItem) {
         guard let index = items?.firstIndex(of: item), index < sources.count else { return }
         TabHaptics.selectionChanged()
@@ -59,6 +69,8 @@ enum GlassTabBar {
     private static weak var row: UIStackView?
     private static weak var platterView: UIView?
     private static var retries = 0
+    private static var pendingRetries = Set<ObjectIdentifier>()
+    private static var readinessAttempts: [ObjectIdentifier: Int] = [:]
     private static var launchTabApplied = false
     private static var filmKey: UInt8 = 0
     private static var platterLogged = false
@@ -83,11 +95,11 @@ enum GlassTabBar {
         _ = tintObserver
         self.stock = stock
         let bar = systemBar(on: stock)
-        guard let row = tabRow(in: stock) else { return }
+        guard let row = tabRow(in: stock) else { retryWhenReady(stock); return }
         row.superview?.layoutIfNeeded()
 
         let tabs = row.arrangedSubviews.filter { !$0.isHidden && $0.bounds.width >= 20 }
-        guard !tabs.isEmpty else { return }
+        guard !tabs.isEmpty else { retryWhenReady(stock); return }
         let labels = Dictionary(tabs.map { (ObjectIdentifier($0), label(in: $0)) }) { first, _ in first }
         func labelOf(_ tab: UIView) -> UILabel? { labels[ObjectIdentifier(tab)] ?? nil }
         func title(_ tab: UIView) -> String? { labelOf(tab)?.text }
@@ -154,6 +166,18 @@ enum GlassTabBar {
         let frame = barFrame(in: stock)
         if bar.frame != frame { bar.frame = frame }
         if stock.subviews.last !== bar { stock.bringSubviewToFront(bar) }
+    }
+
+    // The first layout can precede Spotify adding/sizing its tab row. Retry that
+    // state too, rather than waiting for a settings screen to cause another layout.
+    private static func retryWhenReady(_ stock: UIView) {
+        let key = ObjectIdentifier(stock)
+        guard readinessAttempts[key, default: 0] < 40, pendingRetries.insert(key).inserted else { return }
+        readinessAttempts[key, default: 0] += 1
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak stock] in
+            pendingRetries.remove(key)
+            if let stock, stock.window != nil { sync(stock) }
+        }
     }
 
     // Spotify's own bar stays up until ours has every icon, so launch never shows an empty glass bar.
@@ -236,29 +260,24 @@ enum GlassTabBar {
     // a floor of its own and is centred on Spotify's strip to keep the row where it was.
     private static let minimumBarHeight: CGFloat = 50
     // UIKit's own compact tab bar height above the home indicator.
-    private static let phoneBarHeight: CGFloat = 49
     private static var lastStockSize: CGSize?
     private static var shapeNotes = 0
 
-    // On iPhone the glass bar no longer copies Spotify's frame. Offline, Spotify's container squeezes
-    // its tab bar view (an offline strip takes part of the bottom area), and a UITabBar given that
-    // shorter frame lays the floating platter out squashed. The bar now always gets UIKit's standard
-    // height (49 + the home-indicator inset), pinned to the bottom of the screen, whatever Spotify does.
+    static func bottomInset(in stock: UIView) -> CGFloat {
+        guard let window = stock.window else { return 0 }
+        let bottom = stock.convert(stock.bounds, to: window).maxY
+        return GlassTabBarGeometry.bottomInset(stockBottom: bottom, windowBottom: window.bounds.maxY,
+                                              homeInset: window.safeAreaInsets.bottom)
+    }
+
+    // Follow Spotify's reserved area, including when it moves above the offline
+    // strip. Only include the home-indicator inset when the bar actually touches it.
     static func barFrame(in stock: UIView) -> CGRect {
         let bounds = stock.bounds
         guard bounds.height > 0 else { return bounds }
         guard !ExtrasSafety.safeMode, UIDevice.current.userInterfaceIdiom == .phone,
               let window = stock.window, bounds.width >= 200 else { return stockFrame(bounds) }
-        let height = phoneBarHeight + window.safeAreaInsets.bottom
-        let screenBottom = stock.convert(CGPoint(x: 0, y: window.bounds.maxY), from: window).y
-        let gap = screenBottom - bounds.maxY
-        // Pin to the screen's bottom edge only while Spotify's bar ends at or a little above it
-        // (the offline squeeze). If Spotify slides its bar down to hide it, or anything else looks
-        // unusual, the glass bar simply follows Spotify's frame as it always did.
-        guard height >= 40, height <= 140, gap >= -1, gap < 160, bounds.maxY - height > -400 else {
-            return stockFrame(bounds)
-        }
-        let frame = CGRect(x: bounds.minX, y: screenBottom - height, width: bounds.width, height: height)
+        let frame = GlassTabBarGeometry.phoneFrame(in: bounds, bottomInset: bottomInset(in: stock))
         noteShape(stock, frame: frame, window: window)
         return frame
     }
@@ -289,6 +308,7 @@ enum GlassTabBar {
         guard let stock, let bar = objc_getAssociatedObject(stock, &barKey) as? GlassSystemTabBar else { return }
         let frame = barFrame(in: stock)
         if bar.frame != frame { bar.frame = frame }
+        bar.setNeedsLayout()
     }
 
     // The glass bar can reach past Spotify's (shorter) view; touches there still belong to it.
@@ -370,6 +390,14 @@ class GlassTabBarViewHook: ClassHook<UIView> {
     typealias Group = GlassTabBarGroup
     static let targetName = "_TtC23NavigationUI_TabBarImpl10TabBarView"
 
+    func didMoveToWindow() {
+        orig.didMoveToWindow()
+        guard #available(iOS 26.0, *), target.window != nil else { return }
+        DispatchQueue.main.async { [weak view = target] in
+            if let view, view.window != nil { GlassTabBar.sync(view) }
+        }
+    }
+
     func layoutSubviews() {
         orig.layoutSubviews()
         guard #available(iOS 26.0, *) else { return }
@@ -402,7 +430,11 @@ class GlassTabBarRefitHook: ClassHook<UIViewController> {
     func viewDidLayoutSubviews() {
         orig.viewDidLayoutSubviews()
         guard #available(iOS 26.0, *) else { return }
-        GlassTabBar.refit()
+        if let stock = ObjCCall.object(target, "tabBarView") as? UIView {
+            GlassTabBar.sync(stock)
+        } else {
+            GlassTabBar.refit()
+        }
     }
 }
 
@@ -449,12 +481,11 @@ enum CustomTabs {
             eeveeLog("[EeveeSpotify][CustomTabs] '%@' has an invalid URI %@", tab.title, tab.uri)
             return
         }
-        guard let dispatcher, dispatcher.responds(to: navigate) else {
+        guard let dispatcher else {
             eeveeLog("[EeveeSpotify][CustomTabs] '%@' not opened: link dispatcher not captured yet", tab.title)
             return
         }
-        typealias Navigate = @convention(c) (NSObject, Selector, NSURL, Int64, AnyObject?) -> Void
-        unsafeBitCast(dispatcher.method(for: navigate), to: Navigate.self)(dispatcher, navigate, url as NSURL, 0, nil)
+        guard SpotifyNavigator.navigateInApp(url, using: dispatcher) else { return }
         select(tab)
     }
 

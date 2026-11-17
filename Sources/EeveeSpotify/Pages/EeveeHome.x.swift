@@ -961,6 +961,13 @@ private final class CapsuleButton: UIControl {
 
 // MARK: - Hero card
 
+private final class HeroContentView: UIView {
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        let hit = super.hitTest(point, with: event)
+        return hit === self ? nil : hit
+    }
+}
+
 private final class HeroCard: UIControl {
     var onPin: (() -> Void)?
     var actionsEnabled = true {
@@ -970,6 +977,7 @@ private final class HeroCard: UIControl {
         didSet { if oldValue != tintsFromArtwork { applyAccent(tintsFromArtwork ? artworkAccent : nil) } }
     }
 
+    private let content = HeroContentView()
     private let surface = UIView()
     private let backdrop = UIImageView()
     private let glass = makeGlass(radius: HeroCard.radius)
@@ -983,7 +991,7 @@ private final class HeroCard: UIControl {
     private let subtitle = UILabel()
     private let context = UILabel()
     private let pinButton = UIButton(type: .system)
-    private let pinGlass = makeGlass(radius: 16)
+    private let pinGlass = UIView()
     private let progress = ProgressTrack()
     private let elapsed = UILabel()
     private let remaining = UILabel()
@@ -1021,6 +1029,13 @@ private final class HeroCard: UIControl {
         layer.shadowRadius = 22
         layer.shadowOffset = CGSize(width: 0, height: 10)
 
+        // Keep the background and controls in one rounded coordinate space. Native
+        // glass lenses may draw past their frames; the card owns their visible bounds.
+        content.layer.cornerRadius = Self.radius
+        content.layer.cornerCurve = .continuous
+        content.clipsToBounds = true
+        addSubview(content)
+
         surface.isUserInteractionEnabled = false
         surface.layer.cornerRadius = Self.radius
         surface.layer.cornerCurve = .continuous
@@ -1028,7 +1043,7 @@ private final class HeroCard: UIControl {
         surface.layer.borderColor = Style.hairline.cgColor
         surface.clipsToBounds = true
         surface.backgroundColor = UIColor(white: 0.1, alpha: 1)
-        addSubview(surface)
+        content.addSubview(surface)
 
         backdrop.contentMode = .scaleAspectFill
         backdrop.clipsToBounds = true
@@ -1043,7 +1058,7 @@ private final class HeroCard: UIControl {
         artworkFrame.layer.shadowOpacity = 0.35
         artworkFrame.layer.shadowRadius = 10
         artworkFrame.layer.shadowOffset = CGSize(width: 0, height: 6)
-        addSubview(artworkFrame)
+        content.addSubview(artworkFrame)
         artwork.contentMode = .scaleAspectFill
         artwork.clipsToBounds = true
         artwork.layer.cornerRadius = 16
@@ -1055,7 +1070,7 @@ private final class HeroCard: UIControl {
         emptyGlyph.tintColor = Style.green
         artwork.addSubview(emptyGlyph)
 
-        addSubview(bars)
+        content.addSubview(bars)
         overline.textColor = Style.secondary
         title.textColor = Style.primary
         subtitle.textColor = Style.secondary
@@ -1065,25 +1080,27 @@ private final class HeroCard: UIControl {
         remaining.textAlignment = .right
         [overline, title, subtitle, context, elapsed, remaining].forEach {
             $0.isUserInteractionEnabled = false
-            addSubview($0)
+            content.addSubview($0)
         }
-        addSubview(progress)
+        content.addSubview(progress)
 
         playButton.addTarget(self, action: #selector(playTapped), for: .touchUpInside)
-        addSubview(playButton)
+        content.addSubview(playButton)
         configure(previousButton, "backward.fill", label: "Previous", action: #selector(previousTapped))
         configure(nextButton, "forward.fill", label: "Next", action: #selector(nextTapped))
 
         pinGlass.isUserInteractionEnabled = false
-        addSubview(pinGlass)
+        pinGlass.backgroundColor = UIColor(white: 1, alpha: 0.1)
+        pinGlass.layer.cornerRadius = 16
+        content.addSubview(pinGlass)
         pinButton.tintColor = Style.primary
         pinButton.addTarget(self, action: #selector(pinTapped), for: .touchUpInside)
-        addSubview(pinButton)
+        content.addSubview(pinButton)
 
         recentsButton.addTarget(self, action: #selector(recentsTapped), for: .touchUpInside)
         likedButton.addTarget(self, action: #selector(likedTapped), for: .touchUpInside)
-        addSubview(recentsButton)
-        addSubview(likedButton)
+        content.addSubview(recentsButton)
+        content.addSubview(likedButton)
 
         applyFonts()
         applyAccent(nil)
@@ -1100,7 +1117,7 @@ private final class HeroCard: UIControl {
         button.tintColor = Style.primary
         button.accessibilityLabel = label
         button.addTarget(self, action: action, for: .touchUpInside)
-        addSubview(button)
+        content.addSubview(button)
     }
 
     func applyFonts() {
@@ -1122,7 +1139,9 @@ private final class HeroCard: UIControl {
     override func layoutSubviews() {
         super.layoutSubviews()
         let pad = Self.pad
-        surface.frame = bounds
+        Style.place(content, bounds)
+        let cardBounds = content.bounds
+        surface.frame = cardBounds
         // Oversized and blurred behind the glass, so the cover reads as colour, not as a picture.
         backdrop.frame = surface.bounds.insetBy(dx: -bounds.width * 0.3, dy: -bounds.height * 0.3)
         glass.frame = surface.bounds
@@ -1140,8 +1159,8 @@ private final class HeroCard: UIControl {
 
         let x = artworkFrame.frame.maxX + 14
         let w = bounds.width - x - pad
-        pinGlass.frame = CGRect(x: bounds.width - pad - 28, y: pad - 4, width: 32, height: 32)
-        pinButton.frame = pinGlass.frame.insetBy(dx: -6, dy: -6)
+        pinGlass.frame = CGRect(x: bounds.width - pad - 38, y: pad + 6, width: 32, height: 32)
+        Style.place(pinButton, pinGlass.frame.insetBy(dx: -6, dy: -6))
         let trailing = pinGlass.isHidden ? bounds.width - pad : pinGlass.frame.minX - 6
 
         var y = pad

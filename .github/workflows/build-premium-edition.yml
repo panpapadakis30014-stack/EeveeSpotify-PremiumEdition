@@ -53,6 +53,13 @@ jobs:
           path: ${{ github.workspace }}/theos
           submodules: recursive
 
+      - name: Check tab bar geometry and shortcut routes
+        run: |
+          swiftc Sources/EeveeSpotify/LiquidGlass/GlassTabBarGeometry.swift \
+            Sources/EeveeSpotify/Extras/SpotifyShortcutRoutes.swift \
+            Tests/Polish2DeviceIssues/main.swift -o "$RUNNER_TEMP/device-regressions"
+          "$RUNNER_TEMP/device-regressions"
+
       - name: Install build tools
         run: |
           brew install make dpkg ldid wget

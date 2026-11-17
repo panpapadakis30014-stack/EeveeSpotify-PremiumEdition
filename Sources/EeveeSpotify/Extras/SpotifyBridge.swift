@@ -121,14 +121,53 @@ enum SpotifyNavigator {
             DispatchQueue.main.async { open(uri) }
             return
         }
-        guard let url = URL(string: uri) else { return }
-        if let dispatcher, dispatcher.responds(to: navigate) {
-            typealias Navigate = @convention(c) (NSObject, Selector, NSURL, Int64, AnyObject?) -> Void
-            unsafeBitCast(dispatcher.method(for: navigate), to: Navigate.self)(dispatcher, navigate, url as NSURL, 0, nil)
+        let candidates = SpotifyShortcutRoutes.candidates(for: uri)
+        guard let dispatcher else {
+            PremiumDiag.note("navigation waiting for Spotify UI")
             return
         }
-        // Spotify handles its own URL scheme too.
-        UIApplication.shared.open(url)
+        let check = NSSelectorFromString("canOpenURI:allowExternalApps:")
+        for candidate in candidates {
+            guard let url = URL(string: candidate) else { continue }
+            if matches(dispatcher, check, returns: "B", arguments: ["@", "B"]) {
+                typealias CanOpen = @convention(c) (NSObject, Selector, NSURL, Bool) -> Bool
+                guard unsafeBitCast(dispatcher.method(for: check), to: CanOpen.self)(dispatcher, check, url as NSURL, false) else { continue }
+            }
+            if navigateInApp(url, using: dispatcher) { return }
+        }
+        PremiumDiag.note("navigation unavailable: \(uri)")
+    }
+
+    // 9.1.94 uses the reason/completion/result form. Older builds used interactionID.
+    // Check the ABI before calling either; never send internal routes through iOS.
+    static func navigateInApp(_ url: URL, using dispatcher: NSObject) -> Bool {
+        let current = NSSelectorFromString("navigateToURI:options:reason:completionHandler:resultHandler:")
+        if matches(dispatcher, current, returns: "v", arguments: ["@", "q", "@", "@", "@"]) {
+            typealias Navigate = @convention(c) (NSObject, Selector, NSURL, Int64, AnyObject?, AnyObject?, AnyObject?) -> Void
+            unsafeBitCast(dispatcher.method(for: current), to: Navigate.self)(dispatcher, current, url as NSURL, 0, nil, nil, nil)
+            return true
+        }
+        if matches(dispatcher, navigate, returns: "v", arguments: ["@", "q", "@"]) {
+            typealias Navigate = @convention(c) (NSObject, Selector, NSURL, Int64, AnyObject?) -> Void
+            unsafeBitCast(dispatcher.method(for: navigate), to: Navigate.self)(dispatcher, navigate, url as NSURL, 0, nil)
+            return true
+        }
+        return false
+    }
+
+    private static func matches(_ object: NSObject, _ selector: Selector, returns result: Character,
+                                arguments: [Character]) -> Bool {
+        guard object.responds(to: selector), let method = class_getInstanceMethod(type(of: object), selector),
+              method_getNumberOfArguments(method) == UInt32(arguments.count + 2) else { return false }
+        func code(_ raw: UnsafeMutablePointer<CChar>) -> Character? {
+            defer { free(raw) }
+            return String(cString: raw).first { !"rnNoORV".contains($0) }
+        }
+        guard code(method_copyReturnType(method)) == result else { return false }
+        return arguments.enumerated().allSatisfy { index, expected in
+            guard let raw = method_copyArgumentType(method, UInt32(index + 2)) else { return false }
+            return code(raw) == expected
+        }
     }
 }
 
