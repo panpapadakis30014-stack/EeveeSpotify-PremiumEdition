@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 
 enum GlassTabBarGeometry {
     static func bottomInset(stockBottom: CGFloat, windowBottom: CGFloat, homeInset: CGFloat) -> CGFloat {
