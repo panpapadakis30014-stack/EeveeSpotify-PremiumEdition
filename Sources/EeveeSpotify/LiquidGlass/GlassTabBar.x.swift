@@ -481,7 +481,7 @@ enum CustomTabs {
             eeveeLog("[EeveeSpotify][CustomTabs] '%@' has an invalid URI %@", tab.title, tab.uri)
             return
         }
-        guard let dispatcher else {
+        guard let dispatcher = SpotifyNavigator.dispatcher ?? dispatcher else {
             eeveeLog("[EeveeSpotify][CustomTabs] '%@' not opened: link dispatcher not captured yet", tab.title)
             return
         }

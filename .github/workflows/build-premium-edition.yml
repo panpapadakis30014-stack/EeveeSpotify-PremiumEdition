@@ -59,6 +59,10 @@ jobs:
             Sources/EeveeSpotify/Extras/SpotifyShortcutRoutes.swift \
             Tests/Polish2DeviceIssues/main.swift -o "$RUNNER_TEMP/device-regressions"
           "$RUNNER_TEMP/device-regressions"
+          swiftc Sources/EeveeSpotify/Extras/SpotifyNavigator.swift \
+            Sources/EeveeSpotify/Extras/SpotifyShortcutRoutes.swift \
+            Tests/SpotifyNavigation/main.swift -o "$RUNNER_TEMP/navigation-regressions"
+          "$RUNNER_TEMP/navigation-regressions"
 
       - name: Install build tools
         run: |
