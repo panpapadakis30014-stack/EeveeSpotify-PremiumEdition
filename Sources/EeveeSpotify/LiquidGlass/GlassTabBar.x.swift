@@ -9,6 +9,51 @@ struct GlassTabBarGroup: HookGroup {}
 final class GlassSystemTabBar: UITabBar, UITabBarDelegate {
     weak var stock: UIView?
     var sources: [GlassTabSource] = []
+    private var compact: CompactGlassTabBar?
+    private var hiddenNativeViews: [UIView: Bool] = [:]
+    private var compactWasShown = false
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        if let compact, !compact.isHidden,
+           let hit = compact.hitTest(convert(point, to: compact), with: event) { return hit }
+        return super.hitTest(point, with: event)
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let useCompact = UIDevice.current.userInterfaceIdiom == .phone &&
+            GlassTabBarGeometry.needsCompactRenderer(height: bounds.height,
+                                                     homeInset: stock?.window?.safeAreaInsets.bottom ?? 0)
+        if useCompact != compactWasShown {
+            compactWasShown = useCompact
+            PremiumDiag.note("tabbar compact renderer \(useCompact ? "on" : "off") height \(Int(bounds.height))")
+        }
+        if useCompact {
+            let row: CompactGlassTabBar
+            if let compact { row = compact } else {
+                row = CompactGlassTabBar()
+                row.onSelect = { [weak self] index in
+                    guard let self, let items = self.items, index < items.count else { return }
+                    self.selectedItem = items[index]
+                    self.tabBar(self, didSelect: items[index])
+                }
+                compact = row
+                addSubview(row)
+            }
+            for view in subviews where view !== row {
+                if hiddenNativeViews[view] == nil { hiddenNativeViews[view] = view.isHidden }
+                view.isHidden = true
+            }
+            row.isHidden = false
+            row.frame = bounds
+            row.update(items: items ?? [], selected: selectedItem, tint: tintColor)
+            bringSubviewToFront(row)
+        } else {
+            compact?.isHidden = true
+            for (view, wasHidden) in hiddenNativeViews { view.isHidden = wasHidden }
+            hiddenNativeViews.removeAll()
+        }
+    }
 
     // Offline Spotify places its 49-point strip above the offline banner. Inheriting
     // the container's home-indicator inset leaves only 15 points for the tab items.
@@ -91,6 +136,9 @@ enum GlassTabBar {
     }
 
     static func sync(_ stock: UIView) {
+        // The container's tabBarView property can be a wrapper containing the real
+        // bar. Installing on both hides the inner bar and creates two renderers.
+        guard let cls = NSClassFromString(GlassTabBarViewHook.targetName), stock.isKind(of: cls) else { return }
         _ = observer
         _ = tintObserver
         self.stock = stock
@@ -165,6 +213,7 @@ enum GlassTabBar {
 
         let frame = barFrame(in: stock)
         if bar.frame != frame { bar.frame = frame }
+        bar.setNeedsLayout()
         if stock.subviews.last !== bar { stock.bringSubviewToFront(bar) }
     }
 
@@ -431,7 +480,12 @@ class GlassTabBarRefitHook: ClassHook<UIViewController> {
         orig.viewDidLayoutSubviews()
         guard #available(iOS 26.0, *) else { return }
         if let stock = ObjCCall.object(target, "tabBarView") as? UIView {
-            GlassTabBar.sync(stock)
+            if let cls = NSClassFromString(GlassTabBarViewHook.targetName),
+               let actual = stock.eeveeFirst(UIView.self, where: { $0.isKind(of: cls) }) {
+                GlassTabBar.sync(actual)
+            } else {
+                GlassTabBar.refit()
+            }
         } else {
             GlassTabBar.refit()
         }
